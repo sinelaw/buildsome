@@ -3,44 +3,32 @@
 module Lib.TimeInstances () where
 
 import Control.Applicative ((<$>))
-import Data.Binary(Binary(..))
+import Data.Binary(Binary(..), Get(..), Put)
 import Data.Time.Clock (NominalDiffTime, DiffTime)
 import Data.Fixed (Pico, Fixed(..), E12)
+import Data.Int(Int64)
 
-toPicos :: Pico -> Integer
-fromPicos :: Integer -> Pico
-#if __GLASGOW_HASKELL__ <= 706
-toPicos = truncate . (*1e12)
-fromPicos = (/1e12) . realToFrac
-#else
-toPicos (MkFixed x) = x
-fromPicos = MkFixed
-#endif
-{-# INLINE toPicos #-}
-{-# INLINE fromPicos #-}
+put' :: RealFrac a => a -> Put
+put' x = 
+    do let (a, b) = properFraction x
+       put $! (a :: Int64)
+       put $! (truncate (b * 10^12) :: Int64)
 
-instance Binary (Fixed E12) where
-  get = fromPicos <$> get
-  put = put . toPicos
-  {-# INLINE get #-}
-  {-# INLINE put #-}
-
-{-# INLINE toPico #-}
-toPico :: Real a => a -> Pico
-toPico = realToFrac
-
-{-# INLINE fromPico #-}
-fromPico :: Fractional a => Pico -> a
-fromPico = realToFrac
-
-instance Binary NominalDiffTime where
-  put = put . toPico
-  get = fromPico <$> get
-  {-# INLINE get #-}
-  {-# INLINE put #-}
+get' :: RealFrac a => Get a
+get' = 
+    do a <- get :: Get Int64
+       bScaled <- get :: Get Int64
+       return $! fromIntegral a + (fromIntegral bScaled / 10^12)
 
 instance Binary DiffTime where
-  put = put . toPico
-  get = fromPico <$> get
-  {-# INLINE get #-}
+  put = put' :: DiffTime -> Put
+  get = get' :: Get DiffTime
   {-# INLINE put #-}
+  {-# INLINE get #-}
+
+instance Binary NominalDiffTime where
+  put = put' :: NominalDiffTime -> Put 
+  get = get' :: Get NominalDiffTime
+  {-# INLINE put #-}
+  {-# INLINE get #-}
+  

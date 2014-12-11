@@ -42,9 +42,9 @@ import qualified Text.Parsec.Pos as Pos
 type IncludeStack = [(Pos.SourcePos, ByteString)]
 
 data Writer = Writer
-  { writerTargets :: [Target]
-  , writerPatterns :: [Pattern]
-  , writerWeakVars :: Map VarName ByteString
+  { writerTargets :: ![Target]
+  , writerPatterns :: ![Pattern]
+  , writerWeakVars :: !(Map VarName ByteString)
   }
 instance Monoid Writer where
   mempty = Writer mempty mempty mempty
@@ -52,12 +52,12 @@ instance Monoid Writer where
     Writer (mappend ax bx) (mappend ay by) (mappend az bz)
 
 data State = State
-  { stateIncludeStack :: IncludeStack
-  , stateLocalsStack :: [Vars]
-  , stateRootDir :: FilePath
-  , stateVars :: Vars
-  , stateCond :: CondState
-  , stateWriter :: Writer -- would have used WriterT, but Parsec isn't easily liftable
+  { stateIncludeStack :: !IncludeStack
+  , stateLocalsStack :: ![Vars]
+  , stateRootDir :: !FilePath
+  , stateVars :: !Vars
+  , stateCond :: !CondState
+  , stateWriter :: !Writer -- would have used WriterT, but Parsec isn't easily liftable
   }
 type Parser m = P.ParsecT ByteString State m
 type ParserG = P.ParsecT ByteString
