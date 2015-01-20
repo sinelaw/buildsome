@@ -48,12 +48,12 @@ import Lib.Printer (Printer, printStrLn, putLn)
 import Lib.Show (show)
 import Lib.ShowBytes (showBytes)
 import Lib.StdOutputs (StdOutputs(..))
-import Lib.SyncMap (syncInsert)
 import Lib.TimeIt (timeIt)
 import Prelude hiding (FilePath, show)
 import System.Exit (ExitCode(..))
 import System.Process (CmdSpec(..))
 import Text.Parsec (SourcePos)
+import Lib.SyncMap (SyncMap)
 import qualified Buildsome.BuildId as BuildId
 import qualified Buildsome.BuildMaps as BuildMaps
 import qualified Buildsome.Clean as Clean
@@ -79,6 +79,7 @@ import qualified Lib.Parallelism as Parallelism
 import qualified Lib.Printer as Printer
 import qualified Lib.Process as Process
 import qualified Lib.Set as LibSet
+import qualified Lib.SyncMap as SyncMap
 import qualified Lib.Timeout as Timeout
 import qualified Prelude
 import qualified System.IO as IO
@@ -97,7 +98,7 @@ data Buildsome = Buildsome
     -- dynamic:
   , bsDb :: Db
   , bsFsHook :: FSHook
-  , bsSlaveByTargetRep :: IORef (Map TargetRep (MVar (Slave Stats)))
+  , bsSlaveByTargetRep :: SyncMap TargetRep (Slave Stats)
   , bsParallelism :: Parallelism
   , bsFreshPrinterIds :: Fresh Printer.Id
   , bsFastKillBuild :: E.SomeException -> IO ()
@@ -112,7 +113,7 @@ cancelAllSlaves printer bs = go M.empty
       Timeout.warning time $
       mconcat ["Slave ", Slave.str slave, " did not ", str, " in ", show time, "!"]
     go alreadyCancelled = do
-      curSlaveMap <- readIORef $ bsSlaveByTargetRep bs
+      curSlaveMap <- readIORef . SyncMap.getSyncMap $ bsSlaveByTargetRep bs
       let nonCancelledSlaveMap = curSlaveMap `M.difference` alreadyCancelled
       unless (M.null nonCancelledSlaveMap) $ do
         slaves <-
@@ -123,11 +124,14 @@ cancelAllSlaves printer bs = go M.empty
            ("Slave MVar for " <> cTarget (show targetRep) <> " not populated in 100 millis!")) $
           readMVar mvar
         _ <-
-          (flip mapConcurrently slaves $ \slave ->
-            timeoutWarning "cancel" (Timeout.millis 1000) slave $ Slave.cancel slave)
+          (flip mapConcurrently slaves $ \resultSlave ->
+            case resultSlave of
+              Left _ -> Printer.printStrLn printer ("Slave had an exception on creation, nothing to cancel!" :: String)
+              Right slave -> timeoutWarning "cancel" (Timeout.millis 1000) slave $ Slave.cancel slave)
           `logErrors` "cancel of slaves failed: "
-        _ <- flip mapConcurrently slaves $ \slave ->
-          timeoutWarning "finish" (Timeout.seconds 2) slave $ Slave.waitCatch slave
+        _ <- flip mapConcurrently slaves $ 
+          either (return undefined)
+                 (\slave -> timeoutWarning "finish" (Timeout.seconds 2) slave $ Slave.waitCatch slave)
         -- Make sure to cancel any potential new slaves that were
         -- created during cancellation
         go curSlaveMap
@@ -584,11 +588,8 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
   | any ((== tdRep) . fst) bteParents =
     E.throwIO $ TargetDependencyLoop (bsRender bteBuildsome) newParents
   | otherwise = do
---    newSlaveMVar <- newEmptyMVar
-    E.mask_ $
-      syncInsert (bsSlaveByTargetRep bteBuildsome) tdRep $
-      \newSlaveMVar ->
-       mkSlave newSlaveMVar $ \unmask printer allocParCell ->
+      SyncMap.insert (bsSlaveByTargetRep bteBuildsome) tdRep $
+       mkSlave $ \unmask printer allocParCell ->
           -- Must remain masked through allocParCell so it gets a
           -- chance to handle alloc/exception!
           allocParCell $ \parCell -> unmask $ do
@@ -602,31 +603,23 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
       newParents = (tdRep, bteReason) : bteParents
       panicHandler e@E.SomeException {} =
         panic (bsRender bteBuildsome) $ "FAILED during making of slave: " ++ show e
-      panicOnError mvar =
-        handle $ \e ->
-        do
-          putMVar mvar $ error $ "Failed to create slave: " ++ show e
-          panicHandler e
-      mkSlave mvar action =
-        -- TODO: Remove uninterruptibleMask_?
-        E.uninterruptibleMask $ \restoreUninterruptible -> do
-          slave <-
-            -- Everything under handle is synchronous, so should not
-            -- be interruptible. There shouldn't be a danger of a sync
-            -- or async exception here, so the putMVar is supposed to be
-            -- guaranteed.
-            panicOnError mvar $ do
-              depPrinterId <- Fresh.next $ bsFreshPrinterIds bteBuildsome
-              depPrinter <- Printer.newFrom btePrinter depPrinterId
-              -- NOTE: allocParCell MUST be called to avoid leak!
-              allocParCell <-
-                Parallelism.startAlloc btePriority $
-                bsParallelism bteBuildsome
-              restoreUninterruptible $ -- This only restores to interruptible mask as above!
-                Slave.newWithUnmask tdTarget depPrinterId (targetOutputs tdTarget) $
-                \unmask -> annotate $ action unmask depPrinter allocParCell
-          putMVar mvar slave
-          return slave
+      panicOnError = handle panicHandler
+      mkSlave action = do
+        -- Everything under handle is synchronous, so should not
+        -- be interruptible. There shouldn't be a danger of a sync
+        -- or async exception here, so the putMVar is supposed to be
+        -- guaranteed.
+        panicOnError $ do
+          depPrinterId <- Fresh.next $ bsFreshPrinterIds bteBuildsome
+          depPrinter <- Printer.newFrom btePrinter depPrinterId
+          -- NOTE: allocParCell MUST be called to avoid leak!
+          allocParCell <-
+            Parallelism.startAlloc btePriority $
+            bsParallelism bteBuildsome
+          Slave.newWithUnmask tdTarget depPrinterId (targetOutputs tdTarget) $
+            \unmask -> annotate $ action unmask depPrinter allocParCell
+       
+          
 
 data UnregisteredOutputFileExists = UnregisteredOutputFileExists (ColorText -> ByteString) FilePath
   deriving (Typeable)
@@ -1060,7 +1053,7 @@ with ::
 with printer db makefilePath makefile opt@Opt{..} body = do
   ldPreloadPath <- FSHook.getLdPreloadPath optFsOverrideLdPreloadPath
   FSHook.with printer ldPreloadPath $ \fsHook -> do
-    slaveMapByTargetRep <- newIORef M.empty
+    slaveMapByTargetRep <- SyncMap.new
     parallelism <- Parallelism.new $ fromMaybe 1 optParallelism
     freshPrinterIds <- Fresh.new 1
     buildId <- BuildId.new
