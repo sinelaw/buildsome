@@ -31,7 +31,7 @@ import Data.Typeable (Typeable)
 import Lib.Argv0 (getArgv0)
 import Lib.ByteString (unprefixed)
 import Lib.ColorText (ColorText)
-import Lib.Exception (finally, bracket_, onException)
+import Lib.Exception (finally, bracket_, onException, loggedUninterruptibleMask_)
 import Lib.FSHook.AccessType (AccessType(..))
 import Lib.FSHook.OutputBehavior (OutputEffect(..), OutputBehavior(..))
 import Lib.FSHook.Protocol (IsDelayed(..))
@@ -150,7 +150,7 @@ printRethrowExceptions msg =
   E.handle $ \e -> do
     case E.fromException e of
       Just E.ThreadKilled -> return ()
-      _ -> E.uninterruptibleMask_ $ hPutStrLn stderr $ msg ++ show (e :: E.SomeException)
+      _ -> loggedUninterruptibleMask_ $ hPutStrLn stderr $ msg ++ show (e :: E.SomeException)
     E.throwIO e
 
 with :: Printer -> FilePath -> (FSHook -> IO a) -> IO a
@@ -175,7 +175,7 @@ with printer ldPreloadPath body = do
           AsyncContext.spawn ctx $
             -- Job connection may fail when the process is killed
             -- during a send-message, which may cause a protocol error
-            printRethrowExceptions "Job connection failed: " $
+            printRethrowExceptions (BS8.unpack . Printer.render printer $ "Job connection failed: ") $
             serve printer fsHook conn
             `finally` Sock.close conn
       body fsHook

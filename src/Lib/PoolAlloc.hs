@@ -9,7 +9,7 @@ import Control.Applicative ((<$>))
 import Control.Concurrent.MVar
 import Control.Monad (join)
 import Data.IORef
-import Lib.Exception (onException)
+import Lib.Exception (onException, loggedUninterruptibleMask_)
 import Lib.PriorityQueue (PriorityQueue, Priority)
 import qualified Control.Exception as E
 import qualified Lib.PriorityQueue as PriorityQueue
@@ -57,7 +57,7 @@ alloc priority = join . startAlloc priority
 -- | May release items that were never in the pool
 release :: PoolAlloc a -> a -> IO ()
 release (PoolAlloc stateRef) x =
-  E.uninterruptibleMask_ $ join $ atomicModifyIORef stateRef f
+  loggedUninterruptibleMask_ $ join $ atomicModifyIORef stateRef f
   where
     f (PoolState [] waiters) =
       case PriorityQueue.dequeue waiters of

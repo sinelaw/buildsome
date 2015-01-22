@@ -127,11 +127,15 @@ cancelAllSlaves printer bs = go M.empty
           (flip mapConcurrently slaves $ \resultSlave ->
             case resultSlave of
               Left _ -> Printer.printStrLn printer ("Slave had an exception on creation, nothing to cancel!" :: String)
-              Right slave -> timeoutWarning "cancel" (Timeout.millis 1000) slave $ Slave.cancel slave)
+              Right slave ->
+                do Printer.printStrLn printer ("Cancelling slave: " <> Slave.str slave :: String)
+                   timeoutWarning "cancel" (Timeout.millis 1000) slave $ Slave.cancel slave)
           `logErrors` "cancel of slaves failed: "
         _ <- flip mapConcurrently slaves $ 
           either (return undefined)
-                 (\slave -> timeoutWarning "finish" (Timeout.seconds 2) slave $ Slave.waitCatch slave)
+                 (\slave -> timeoutWarning "finish" (Timeout.seconds 2) slave $
+                            do Printer.printStrLn printer ("Waiting for slave: " <> Slave.str slave :: String)
+                               Slave.waitCatch slave)
         -- Make sure to cancel any potential new slaves that were
         -- created during cancellation
         go curSlaveMap
@@ -605,6 +609,7 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
         panic (bsRender bteBuildsome) $ "FAILED during making of slave: " ++ show e
       panicOnError = handle panicHandler
       mkSlave action = do
+        printStrLn btePrinter $ bsRender bteBuildsome $ ("Starting slave for: " <> show tdRep)
         -- Everything under handle is synchronous, so should not
         -- be interruptible. There shouldn't be a danger of a sync
         -- or async exception here, so the putMVar is supposed to be

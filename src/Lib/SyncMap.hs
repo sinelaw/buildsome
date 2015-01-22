@@ -9,12 +9,13 @@ module Lib.SyncMap
     ) where
 
 import           Control.Concurrent.MVar
-import qualified Control.Exception       as E
+import           Control.Exception       (SomeException, mask_, try, throwIO)
 import           Data.Functor            ((<$>))
 import           Data.IORef              (IORef, atomicModifyIORef, newIORef)
 import qualified Data.Map.Strict         as M
+import qualified Lib.Exception           as E
 
-type Result = Either E.SomeException
+type Result = Either SomeException
 
 newtype SyncMap k a = SyncMap { getSyncMap :: IORef (M.Map k (MVar (Result a))) }
 
@@ -35,7 +36,7 @@ tryInsert (SyncMap refMap) key action =
      let fillMVar x =
            do putMVar mvar x
               return (Inserted, x)
-     E.mask_ $
+     mask_ $
        do scheduledAction <-
             atomicModifyIORef refMap $
               \oldMap ->
@@ -43,7 +44,7 @@ tryInsert (SyncMap refMap) key action =
                   Just oldMVar -> (oldMap, (Old,) <$> readMVar oldMVar)
                   Nothing ->
                     ( M.insert key mvar oldMap
-                    , E.uninterruptibleMask_ $ E.try action >>= fillMVar
+                    , E.loggedUninterruptibleMask_ $ try action >>= fillMVar
                     )
           scheduledAction
 
@@ -52,7 +53,7 @@ tryInsert (SyncMap refMap) key action =
 insert :: Ord k => SyncMap k a -> k -> IO a -> IO a
 insert syncMap key action =
   do (_, res) <- tryInsert syncMap key action
-     either E.throwIO return res
+     either throwIO return res
 
 
 new :: IO (SyncMap k v)

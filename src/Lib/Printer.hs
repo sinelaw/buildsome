@@ -17,7 +17,7 @@ import Data.IORef
 import Data.Monoid
 import Data.String (IsString(..))
 import Lib.ColorText (ColorText)
-import Lib.Exception (onExceptionWith, bracket_)
+import Lib.Exception (onExceptionWith, bracket_, loggedUninterruptibleMask_)
 import Prelude hiding (lines, putStrLn)
 import Text.Printf (printf)
 import qualified Control.Exception as E
@@ -37,7 +37,7 @@ ignoreResourceVanished act = do
       unless (t == G.ResourceVanished) $ E.throwIO e
 
 wrapOutputCall :: IO () -> IO ()
-wrapOutputCall = E.uninterruptibleMask_ . ignoreResourceVanished
+wrapOutputCall = loggedUninterruptibleMask_ . ignoreResourceVanished
 
 putLn :: String -> IO ()
 putLn = wrapOutputCall . IO.hPutStrLn IO.stderr
