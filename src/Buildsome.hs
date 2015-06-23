@@ -530,15 +530,17 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
-  forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
+  forM_ elOutputsDescs $ \(filePath, outputDesc) ->
     verifyFileDesc bte "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
       verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
          db filePath stat) oldMContentDesc
+  let melInputsDescs = M.fromList elInputsDescs
+      melOutputsDescs = M.fromList elOutputsDescs
   liftIO $
     replayExecutionLog bte tdTarget
-    (M.keysSet elInputsDescs) (M.keysSet elOutputsDescs)
+    (M.keysSet melInputsDescs) (M.keysSet melOutputsDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
@@ -561,7 +563,7 @@ executionLogBuildInputs bte@BuildTargetEnv{..} parCell TargetDesc{..} Db.Executi
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
+  speculativeSlaves <- concat <$> mapM mkInputSlaves elInputsDescs
   waitForSlavesWithParReleased btePriority parCell bteBuildsome
     speculativeSlaves
   where
@@ -910,8 +912,8 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
   return Db.ExecutionLog
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
-    , elInputsDescs = inputsDescs
-    , elOutputsDescs = M.fromList outputDescPairs
+    , elInputsDescs = M.toList inputsDescs
+    , elOutputsDescs = outputDescPairs
     , elStdoutputs = stdOutputs
     , elSelfTime = selfTime
     }
