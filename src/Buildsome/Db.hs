@@ -37,6 +37,7 @@ import Prelude hiding (FilePath)
 import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Set as S
+import qualified Data.Map as M
 import qualified Database.LevelDB.Base as LevelDB
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
@@ -48,6 +49,9 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
+  , dbExecutionLogCache :: IORef (Map ByteString (Maybe ExecutionLog))
+  , dbFileContentDescCache :: IORef (Map FilePath (Maybe FileContentDescCache))
+  , dbMakefileParseCache :: IORef (Map ByteString (Maybe MakefileParseCache))
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -111,10 +115,13 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
+  executionLog' <- newIORef $ M.empty
+  fileContentDescCache' <- newIORef $ M.empty
+  makefileParseCache' <- newIORef $ M.empty
   bracket (openDb dbPath) LevelDB.close $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs)
+    body (Db levelDb registeredOutputs leakedOutputs executionLog' fileContentDescCache' makefileParseCache')
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -132,20 +139,29 @@ data IRef a = IRef
   , delIRef :: IO ()
   }
 
-mkIRefKey :: Binary a => ByteString -> Db -> IRef a
-mkIRefKey key db = IRef
-  { readIRef = getKey db key
-  , writeIRef = setKey db key
-  , delIRef = deleteKey db key
+mkIRefKey :: Binary a => IORef (Map ByteString (Maybe a)) -> ByteString -> Db -> IRef a
+mkIRefKey cache key db = IRef
+  { readIRef = do v <- readIORef $ cache
+                  case M.lookup key v of
+                      Nothing -> do k <- getKey db key
+                                    writeIORef cache $ M.insert key k v
+                                    return k
+                      Just v' -> return v'
+  , writeIRef = \x -> do setKey db key x
+                         v <- readIORef $ cache
+                         writeIORef cache $ M.insert key (Just x) v
+  , delIRef = do deleteKey db key
+                 -- TODO writeIORef cache ...
   }
 
+
 executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog target = mkIRefKey targetKey
+executionLog target db = mkIRefKey (dbExecutionLogCache db) targetKey db
   where
     targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
-fileContentDescCache = mkIRefKey
+fileContentDescCache fp db = mkIRefKey (dbFileContentDescCache db) fp db
 
 type MFileContentDesc = FileDesc () FileContentDesc
 
@@ -157,4 +173,4 @@ instance Binary MakefileParseCache
 
 makefileParseCache :: Db -> Makefile.Vars -> IRef MakefileParseCache
 makefileParseCache db vars =
-    mkIRefKey ("makefileParseCache_Schema.1:" <> MD5.hash (encode vars)) db
+    mkIRefKey (dbMakefileParseCache db) ("makefileParseCache_Schema.1:" <> MD5.hash (encode vars)) db
