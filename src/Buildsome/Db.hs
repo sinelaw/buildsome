@@ -143,14 +143,17 @@ mkIRefKey :: Binary a => IORef (Map ByteString (Maybe a)) -> ByteString -> Db ->
 mkIRefKey cache key db = IRef
   { readIRef = do v <- readIORef $ cache
                   case M.lookup key v of
-                      Nothing -> do k <- getKey db key
-                                    writeIORef cache $ M.insert key k v
-                                    return k
+                      Nothing -> do --k <- getKey db key
+                                    --writeIORef cache $ M.insert key k v
+                                    --return k
+                                    return Nothing
                       Just v' -> return v'
-  , writeIRef = \x -> do setKey db key x
+  , writeIRef = \x -> do --setKey db key x
                          v <- readIORef $ cache
                          writeIORef cache $ M.insert key (Just x) v
-  , delIRef = do deleteKey db key
+  , delIRef = do --deleteKey db key
+                 v <- readIORef $ cache
+                 writeIORef cache $ M.delete key v
                  -- TODO writeIORef cache ...
   }
 
