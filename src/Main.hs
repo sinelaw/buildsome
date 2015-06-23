@@ -248,15 +248,21 @@ handleOpts printer (Opts opt) body = do
      pure                   -- <- on reason
      (Opts.extraOutputsAtFilePaths inOrigCwd) -- <- onExtraOutputs
     ) rawRequested
-  Buildsome.withDb finalMakefilePath $ \db -> do
-    makefile <-
-      parseMakefile printer db origMakefilePath finalMakefilePath (optVars opt)
-    let flags = flagsOfVars (Makefile.makefileWeakVars makefile)
-    if optHelpFlags opt
-      then showHelpFlags flags
-      else do
-        verifyValidFlags flags (optWiths opt ++ optWithouts opt)
-        body db opt requested finalMakefilePath makefile
+  let buildAction db =
+        do
+            makefile <-
+              parseMakefile printer db origMakefilePath finalMakefilePath (optVars opt)
+            let flags = flagsOfVars (Makefile.makefileWeakVars makefile)
+            if optHelpFlags opt
+              then showHelpFlags flags
+              else do
+                verifyValidFlags flags (optWiths opt ++ optWithouts opt)
+                body db opt requested finalMakefilePath makefile
+            _ <- getLine
+            buildAction db
+
+  Buildsome.withDb finalMakefilePath buildAction
+
 
 handleRequested :: Buildsome -> Printer -> Requested -> IO ()
 handleRequested buildsome printer RequestedClean = Buildsome.clean printer buildsome
