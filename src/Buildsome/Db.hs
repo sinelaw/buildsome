@@ -41,17 +41,21 @@ import qualified Data.Map as M
 import qualified Database.LevelDB.Base as LevelDB
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
+import qualified Data.HashTable.IO as H
 
 schemaVersion :: ByteString
 schemaVersion = "schema.ver.16"
+
+
+type HashTable k v = H.CuckooHashTable k v
 
 data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
-  , dbExecutionLogCache :: IORef (Map ByteString (Maybe ExecutionLog))
-  , dbFileContentDescCache :: IORef (Map FilePath (Maybe FileContentDescCache))
-  , dbMakefileParseCache :: IORef (Map ByteString (Maybe MakefileParseCache))
+  , dbExecutionLogCache :: HashTable ByteString (Maybe ExecutionLog)
+  , dbFileContentDescCache :: HashTable FilePath (Maybe FileContentDescCache)
+  , dbMakefileParseCache :: HashTable ByteString (Maybe MakefileParseCache)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -115,9 +119,9 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
-  executionLog' <- newIORef $ M.empty
-  fileContentDescCache' <- newIORef $ M.empty
-  makefileParseCache' <- newIORef $ M.empty
+  executionLog' <- H.new
+  fileContentDescCache' <- H.new
+  makefileParseCache' <- H.new
   bracket (openDb dbPath) LevelDB.close $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
@@ -139,21 +143,19 @@ data IRef a = IRef
   , delIRef :: IO ()
   }
 
-mkIRefKey :: Binary a => IORef (Map ByteString (Maybe a)) -> ByteString -> Db -> IRef a
+mkIRefKey :: Binary a => HashTable ByteString (Maybe a) -> ByteString -> Db -> IRef a
 mkIRefKey cache key db = IRef
-  { readIRef = do v <- readIORef $ cache
-                  case M.lookup key v of
+  { readIRef = do v <- H.lookup cache key
+                  case v of
                       Nothing -> do --k <- getKey db key
                                     --writeIORef cache $ M.insert key k v
                                     --return k
                                     return Nothing
                       Just v' -> return v'
   , writeIRef = \x -> do --setKey db key x
-                         v <- readIORef $ cache
-                         writeIORef cache $ M.insert key (Just x) v
+                         H.insert cache key (Just x)
   , delIRef = do --deleteKey db key
-                 v <- readIORef $ cache
-                 writeIORef cache $ M.delete key v
+                 H.delete cache key
                  -- TODO writeIORef cache ...
   }
 
