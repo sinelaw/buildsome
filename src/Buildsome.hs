@@ -235,7 +235,7 @@ want printer buildsome reason paths = do
   alloc <- Parallelism.startAlloc priority (bsParallelism buildsome)
   (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
     alloc $ \parCell ->
-    timeIt $ buildExplicitWithParReleased bte parCell $ map SlaveRequestDirect paths
+    timeIt $ {-# SCC buildExplicitWithParRelease_manual #-} buildExplicitWithParReleased bte parCell $ map SlaveRequestDirect paths
   let stdErrs = Stats.stdErr $ builtStats builtTargets
       lastLinePrefix
         | not (S.null stdErrs) =
@@ -246,7 +246,7 @@ want printer buildsome reason paths = do
   printStrLn printer $ mconcat
     [ lastLinePrefix, ": "
     , cTiming (show buildTime <> " seconds"), " total." ]
-  checkCachedFileDescsUnchanged bte
+  {-# SCC checkCachedFileDescsUnchanged_manual #-} checkCachedFileDescsUnchanged bte
   return builtTargets
   where
     Color.Scheme{..} = Color.scheme
@@ -516,8 +516,8 @@ executionLogVerifyFilesState ::
   MonadIO m =>
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
-executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
-  forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
+executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = {-# SCC executionLogVerifyFilesState_manual #-} do
+  forM_ elInputsDescs $ \(filePath, desc) ->
     verifyFileDesc bte "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
         let verify str getDesc mPair =
@@ -559,7 +559,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Cell -> TargetDesc ->
   Db.ExecutionLog -> IO BuiltTargets
-executionLogBuildInputs bte@BuildTargetEnv{..} parCell TargetDesc{..} Db.ExecutionLog {..} = do
+executionLogBuildInputs bte@BuildTargetEnv{..} parCell TargetDesc{..} Db.ExecutionLog {..} = {-# SCC executionLogBuildInputs_manual #-} do
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:

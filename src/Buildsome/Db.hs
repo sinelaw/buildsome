@@ -97,7 +97,9 @@ setKey :: Binary a => Db -> ByteString -> a -> IO ()
 setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
 
 getKey :: Binary a => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey db key =
+    do v <- {-# SCC leveldb_get #-} (LevelDB.get (dbLevel db) def key)
+       return $ {-# SCC decode_getkey #-} fmap decode v
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def
@@ -140,9 +142,9 @@ mkIRefKey key db = IRef
   }
 
 executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog target = mkIRefKey targetKey
+executionLog target = {-# SCC executionLog_manual #-} mkIRefKey targetKey
   where
-    targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
+    targetKey = {-# SCC targetKey #-} (MD5.hash $ Makefile.targetCmds target) -- TODO: Canonicalize commands (whitespace/etc)
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey

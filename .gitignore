@@ -6,3 +6,6 @@
 *.hi
 *.o
 
+build_failed.aiff
+build_completed.aiff
+
