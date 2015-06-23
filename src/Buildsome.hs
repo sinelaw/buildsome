@@ -176,6 +176,7 @@ data BuildTargetEnv = BuildTargetEnv
   , bteExplicitlyDemanded :: Bool
   , btePriority :: Parallelism.Priority
   , bteSpeculative :: Bool
+  , bteFileStatCache :: IORef (Map FilePath (Maybe Posix.FileStatus))
   }
 
 data BuiltTargets = BuiltTargets
@@ -218,6 +219,7 @@ want :: Printer -> Buildsome -> Reason -> [FilePath] -> IO BuiltTargets
 want printer buildsome reason paths = do
   printStrLn printer $
     "Building: " <> ColorText.intercalate ", " (map (cTarget . show) paths)
+  statCache <- newIORef $ M.empty
   let priority = 0
       bte =
         BuildTargetEnv
@@ -228,6 +230,7 @@ want printer buildsome reason paths = do
         , bteExplicitlyDemanded = True
         , btePriority = priority
         , bteSpeculative = False
+        , bteFileStatCache = statCache
         }
   alloc <- Parallelism.startAlloc priority (bsParallelism buildsome)
   (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
@@ -243,6 +246,7 @@ want printer buildsome reason paths = do
   printStrLn printer $ mconcat
     [ lastLinePrefix, ": "
     , cTiming (show buildTime <> " seconds"), " total." ]
+  checkCachedFileDescsUnchanged bte
   return builtTargets
   where
     Color.Scheme{..} = Color.scheme
@@ -432,16 +436,32 @@ replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfT
 
 verifyFileDesc ::
   (IsString str, Monoid str, MonadIO m) =>
+  BuildTargetEnv ->
   str -> FilePath -> Db.FileDesc ne desc ->
   (Posix.FileStatus -> desc -> EitherT (str, FilePath) m ()) ->
   EitherT (str, FilePath) m ()
-verifyFileDesc str filePath fileDesc existingVerify = do
-  mStat <- liftIO $ Dir.getMFileStatus filePath
+verifyFileDesc bte str filePath fileDesc existingVerify = do
+  let statCache = bteFileStatCache bte
+  mStatCache <- liftIO $ readIORef statCache
+  mStat <- case M.lookup filePath mStatCache of
+             Nothing -> do res <- liftIO $ Dir.getMFileStatus filePath
+                           liftIO $ writeIORef statCache $ M.insert filePath res mStatCache
+                           return res
+             Just x -> return x
   case (mStat, fileDesc) of
     (Nothing, Db.FileDescNonExisting _) -> return ()
     (Just stat, Db.FileDescExisting desc) -> existingVerify stat desc
     (Just _, Db.FileDescNonExisting _)  -> left (str <> " file did not exist, now exists", filePath)
     (Nothing, Db.FileDescExisting {}) -> left (str <> " file was deleted", filePath)
+
+checkCachedFileDescsUnchanged bte = do
+  let statCache = bteFileStatCache bte
+  mStatCache <- readIORef statCache
+  forM_ (M.toList mStatCache) $ \(filePath, cachedStat) -> do
+    res <- fmap fileStatDescOfStat <$> Dir.getMFileStatus filePath
+    if res /= fmap fileStatDescOfStat cachedStat
+    then error $ "Cached stat for '" ++ show filePath ++ "' is outdated. Third party meddling?"
+    else return ()
 
 data TargetDesc = TargetDesc
   { tdRep :: TargetRep
@@ -498,7 +518,7 @@ executionLogVerifyFilesState ::
   EitherT (ByteString, FilePath) m ()
 executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
   forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
-    verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
+    verifyFileDesc bte "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
         let verify str getDesc mPair =
               verifyMDesc ("input(" <> str <> ")") filePath getDesc $ snd <$> mPair
@@ -511,7 +531,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
   forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
-    verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
+    verifyFileDesc bte "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
       verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
