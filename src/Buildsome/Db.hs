@@ -13,6 +13,7 @@ module Buildsome.Db
 
 import Buildsome.BuildId (BuildId)
 import Control.Applicative ((<$>))
+import Control.Concurrent (forkIO)
 import Data.Binary (Binary(..))
 import Data.ByteString (ByteString)
 import Data.Default (def)
@@ -147,16 +148,15 @@ mkIRefKey :: Binary a => HashTable ByteString (Maybe a) -> ByteString -> Db -> I
 mkIRefKey cache key db = IRef
   { readIRef = do v <- H.lookup cache key
                   case v of
-                      Nothing -> do --k <- getKey db key
-                                    --writeIORef cache $ M.insert key k v
-                                    --return k
-                                    return Nothing
+                      Nothing -> do v' <- getKey db key
+                                    H.insert cache key v'
+                                    return v'
+                                    -- return Nothing
                       Just v' -> return v'
-  , writeIRef = \x -> do --setKey db key x
+  , writeIRef = \x -> do setKey db key x
                          H.insert cache key (Just x)
-  , delIRef = do --deleteKey db key
+  , delIRef = do deleteKey db key
                  H.delete cache key
-                 -- TODO writeIORef cache ...
   }
 
 
