@@ -51,39 +51,39 @@ data Db = Db
   }
 
 data FileContentDescCache = FileContentDescCache
-  { fcdcModificationTime :: POSIXTime
-  , fcdcFileContentDesc :: FileContentDesc
+  { fcdcModificationTime :: !POSIXTime
+  , fcdcFileContentDesc :: !FileContentDesc
   } deriving (Generic, Show)
 instance Binary FileContentDescCache
 
 type Reason = ColorText
 
 data InputDesc = InputDesc
-  { idModeAccess :: Maybe (Reason, FileModeDesc)
-  , idStatAccess :: Maybe (Reason, FileStatDesc)
-  , idContentAccess :: Maybe (Reason, FileContentDesc)
+  { idModeAccess :: !(Maybe (Reason, FileModeDesc))
+  , idStatAccess :: !(Maybe (Reason, FileStatDesc))
+  , idContentAccess :: !(Maybe (Reason, FileContentDesc))
   } deriving (Generic, Show)
 instance Binary InputDesc
 
 data FileDesc ne e
-  = FileDescNonExisting ne
-  | FileDescExisting e
+  = FileDescNonExisting !ne
+  | FileDescExisting !e
   deriving (Generic, Eq, Ord, Show)
 instance (Binary ne, Binary e) => Binary (FileDesc ne e)
 
 data OutputDesc = OutputDesc
-  { odStatDesc :: FileStatDesc
-  , odContentDesc :: Maybe FileContentDesc -- Nothing if directory
+  { odStatDesc :: !FileStatDesc
+  , odContentDesc :: !(Maybe FileContentDesc) -- Nothing if directory
   } deriving (Generic, Show)
 instance Binary OutputDesc
 
 data ExecutionLog = ExecutionLog
-  { elBuildId :: BuildId
-  , elCommand :: ByteString -- Mainly for debugging
-  , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
-  , elOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
-  , elStdoutputs :: StdOutputs ByteString
-  , elSelfTime :: DiffTime
+  { elBuildId :: !BuildId
+  , elCommand :: !ByteString -- Mainly for debugging
+  , elInputsDescs :: !(Map FilePath (FileDesc Reason (POSIXTime, InputDesc)))
+  , elOutputsDescs :: !(Map FilePath (FileDesc () OutputDesc))
+  , elStdoutputs :: !(StdOutputs ByteString)
+  , elSelfTime :: !DiffTime
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
