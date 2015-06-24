@@ -249,7 +249,6 @@ want printer buildsome reason paths = do
   printStrLn printer $ mconcat
     [ lastLinePrefix, ": "
     , cTiming (show buildTime <> " seconds"), " total." ]
-  checkCachedFileDescsUnchanged bte
   return builtTargets
   where
     Color.Scheme{..} = Color.scheme
@@ -456,14 +455,6 @@ verifyFileDesc bte str filePath fileDesc existingVerify = do
     (Just stat, Db.FileDescExisting desc) -> existingVerify stat desc
     (Just _, Db.FileDescNonExisting _)  -> left (str <> " file did not exist, now exists", filePath)
     (Nothing, Db.FileDescExisting {}) -> left (str <> " file was deleted", filePath)
-
-checkCachedFileDescsUnchanged bte = do
-  let statCache = bteFileStatCache bte
-  (flip H.mapM_) statCache $ \(filePath, cachedStat) -> do
-    res <- fmap fileStatDescOfStat <$> Dir.getMFileStatus filePath
-    if res /= fmap fileStatDescOfStat cachedStat
-    then error $ "Cached stat for '" ++ show filePath ++ "' is outdated. Third party meddling?"
-    else return ()
 
 data TargetDesc = TargetDesc
   { tdRep :: TargetRep
