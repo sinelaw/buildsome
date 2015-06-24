@@ -107,6 +107,7 @@ data Opt = Opt { optRequestedTargets :: [FilePath]
                  -- just make life more difficult for users, so it is
                  -- allowed in conjunction
                , optHelpFlags :: Bool
+               , optBenchmark :: Bool
                }
   deriving (Show)
 
@@ -216,3 +217,4 @@ get =
                            help "Disable flags that are enabled by default"))
           <*> parseVerbosity
           <*> switch (long "help-flags" <> help "Get all flag variables assigned with ?=")
+          <*> switch (long "benchmark" <> help "Benchmark")

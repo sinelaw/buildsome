@@ -4,6 +4,7 @@ module Main (main) where
 import Buildsome (Buildsome)
 import Buildsome.Db (Db, Reason)
 import Buildsome.Opts (Opts(..), Opt(..))
+import Buildsome.Benchmark (runBenchmark)
 import Control.Applicative (Applicative(..), (<$>))
 import Control.Monad
 import Data.ByteString (ByteString)
@@ -254,9 +255,13 @@ handleOpts printer (Opts opt) body = do
     let flags = flagsOfVars (Makefile.makefileWeakVars makefile)
     if optHelpFlags opt
       then showHelpFlags flags
-      else do
-        verifyValidFlags flags (optWiths opt ++ optWithouts opt)
-        body db opt requested finalMakefilePath makefile
+      else if optBenchmark opt
+           then do putStrLn "Running benchmark..."
+                   runBenchmark db
+                   putStrLn "Done."
+           else do
+               verifyValidFlags flags (optWiths opt ++ optWithouts opt)
+               body db opt requested finalMakefilePath makefile
 
 handleRequested :: Buildsome -> Printer -> Requested -> IO ()
 handleRequested buildsome printer RequestedClean = Buildsome.clean printer buildsome
