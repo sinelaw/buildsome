@@ -18,8 +18,9 @@ instance E.Exception ThirdPartyMeddlingError
 -- TODO: Rename MTime to something else, it tests more than mtime
 assertFileMTime :: String -> FilePath -> Maybe Posix.FileStatus -> IO ()
 assertFileMTime msgPrefix path oldMStat = do
-  newMStat <- Dir.getMFileStatus path
-  assertSameMTime msgPrefix path oldMStat newMStat
+  return () -- TODO undisable
+  -- newMStat <- Dir.getMFileStatus path
+  -- assertSameMTime msgPrefix path oldMStat newMStat
 
 assertSameMTime ::
   String -> FilePath -> Maybe Posix.FileStatus -> Maybe Posix.FileStatus -> IO ()
