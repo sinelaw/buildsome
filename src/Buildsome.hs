@@ -83,6 +83,9 @@ import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
 import           System.Process (CmdSpec(..))
 import           Text.Parsec (SourcePos)
+import qualified Data.HashTable.IO as H
+
+type HashTable k v = H.CuckooHashTable k v
 
 type Parents = [(TargetRep, Target, Reason)]
 
@@ -176,7 +179,7 @@ data BuildTargetEnv = BuildTargetEnv
   , bteExplicitlyDemanded :: Bool
   , btePriority :: Parallelism.Priority
   , bteSpeculative :: Bool
-  , bteFileStatCache :: IORef (Map FilePath (Maybe Posix.FileStatus))
+  , bteFileStatCache :: HashTable FilePath (Maybe Posix.FileStatus)
   }
 
 data BuiltTargets = BuiltTargets
@@ -219,7 +222,7 @@ want :: Printer -> Buildsome -> Reason -> [FilePath] -> IO BuiltTargets
 want printer buildsome reason paths = do
   printStrLn printer $
     "Building: " <> ColorText.intercalate ", " (map (cTarget . show) paths)
-  statCache <- newIORef $ M.empty
+  statCache <- H.new
   let priority = 0
       bte =
         BuildTargetEnv
@@ -442,10 +445,10 @@ verifyFileDesc ::
   EitherT (str, FilePath) m ()
 verifyFileDesc bte str filePath fileDesc existingVerify = do
   let statCache = bteFileStatCache bte
-  mStatCache <- liftIO $ readIORef statCache
-  mStat <- case M.lookup filePath mStatCache of
+  s <- liftIO $ H.lookup statCache filePath
+  mStat <- case s of
              Nothing -> do res <- liftIO $ Dir.getMFileStatus filePath
-                           liftIO $ writeIORef statCache $ M.insert filePath res mStatCache
+                           liftIO $ H.insert statCache filePath res
                            return res
              Just x -> return x
   case (mStat, fileDesc) of
@@ -456,8 +459,7 @@ verifyFileDesc bte str filePath fileDesc existingVerify = do
 
 checkCachedFileDescsUnchanged bte = do
   let statCache = bteFileStatCache bte
-  mStatCache <- readIORef statCache
-  forM_ (M.toList mStatCache) $ \(filePath, cachedStat) -> do
+  (flip H.mapM_) statCache $ \(filePath, cachedStat) -> do
     res <- fmap fileStatDescOfStat <$> Dir.getMFileStatus filePath
     if res /= fmap fileStatDescOfStat cachedStat
     then error $ "Cached stat for '" ++ show filePath ++ "' is outdated. Third party meddling?"
