@@ -231,7 +231,7 @@ want printer buildsome reason paths = do
         }
   alloc <- Parallelism.startAlloc priority (bsParallelism buildsome)
   (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
-    alloc $ \parCell ->
+    alloc printer $ \parCell ->
     timeIt $ buildExplicitWithParReleased bte parCell $ map SlaveRequestDirect paths
   let stdErrs = Stats.stdErr $ builtStats builtTargets
       lastLinePrefix
@@ -322,11 +322,11 @@ slaveReqForAccessType FSHook.AccessTypeStat =
 -- slaves, i.e: when waiting for them, in this function.
 -- Do NOT release parallelism in any other context!
 waitForSlavesWithParReleased ::
-  Parallelism.Priority -> Parallelism.Cell -> Buildsome ->
+  Printer -> Parallelism.Priority -> Parallelism.Cell -> Buildsome ->
   [Slave Stats] -> IO BuiltTargets
-waitForSlavesWithParReleased _ _ _ [] = return mempty
-waitForSlavesWithParReleased priority parCell buildsome slaves =
-  Parallelism.withReleased priority parCell (bsParallelism buildsome) $
+waitForSlavesWithParReleased _ _ _ _ [] = return mempty
+waitForSlavesWithParReleased printer priority parCell buildsome slaves =
+  Parallelism.withReleased printer priority parCell (bsParallelism buildsome) $
   do
     stats <- mconcat <$> mapM Slave.wait slaves
     return BuiltTargets { builtTargets = map Slave.target slaves, builtStats = stats }
@@ -336,7 +336,7 @@ buildExplicitWithParReleased ::
   IO (ExplicitPathsBuilt, BuiltTargets)
 buildExplicitWithParReleased bte@BuildTargetEnv{..} parCell inputs = do
   built <-
-    waitForSlavesWithParReleased btePriority parCell bteBuildsome . concat =<<
+    waitForSlavesWithParReleased btePrinter btePriority parCell bteBuildsome . concat =<<
     mapM (slavesFor bte) inputs
   explicitPathsBuilt <- assertExplicitInputsExist bte $ map inputFilePath inputs
   return (explicitPathsBuilt, built)
@@ -542,7 +542,7 @@ executionLogBuildInputs bte@BuildTargetEnv{..} parCell TargetDesc{..} Db.Executi
   -- inputs changed, as it may build stuff that's no longer
   -- required:
   speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
-  waitForSlavesWithParReleased btePriority parCell bteBuildsome
+  waitForSlavesWithParReleased btePrinter btePriority parCell bteBuildsome
     speculativeSlaves
   where
     Color.Scheme{..} = Color.scheme
@@ -580,7 +580,7 @@ parentDirs = map FilePath.takeDirectory . filter (`notElem` ["", "/"])
 buildManyWithParReleased ::
   (ColorText -> Reason) -> BuildTargetEnv -> Parallelism.Cell -> [SlaveRequest] -> IO BuiltTargets
 buildManyWithParReleased mkReason bte@BuildTargetEnv{..} parCell =
-  waitForSlavesWithParReleased btePriority parCell bteBuildsome <=<
+  waitForSlavesWithParReleased btePrinter btePriority parCell bteBuildsome <=<
   fmap concat . mapM mkSlave
   where
     Color.Scheme{..} = Color.scheme
@@ -645,10 +645,11 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
     E.throwIO $ TargetDependencyLoop (bsRender bteBuildsome) newParents
   | otherwise = do
       SyncMap.insert (bsSlaveByTargetRep bteBuildsome) tdRep $
-        mkSlave $ \unmask printer allocParCell ->
+        mkSlave $ \unmask printer allocParCell -> do
           -- Must remain masked through allocParCell so it gets a
           -- chance to handle alloc/exception!
-          allocParCell $ \parCell -> unmask $ do
+          printStrLn printer ("Finishing up the started allocation..."::String)
+          allocParCell printer $ \parCell -> unmask $ do
             let newBte = bte { bteParents = newParents, btePrinter = printer }
             buildTarget newBte parCell TargetDesc{..}
     where
@@ -674,6 +675,7 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
             depPrinterId <- Fresh.next $ bsFreshPrinterIds bteBuildsome
             depPrinter <- Printer.newFrom btePrinter depPrinterId
             -- NOTE: allocParCell MUST be called to avoid leak!
+            printStrLn btePrinter $ ("Starting allocation at parent for child " ++ show depPrinterId :: String)
             allocParCell <-
               Parallelism.startAlloc btePriority $
               bsParallelism bteBuildsome
