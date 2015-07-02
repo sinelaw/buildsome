@@ -38,6 +38,7 @@ import qualified Data.Map as M
 import qualified Lib.ColorText as ColorText
 import qualified Lib.FilePath as FilePath
 import qualified Lib.Makefile as Makefile
+import qualified Lib.Parallelism as Parallelism
 import qualified Lib.Printer as Printer
 import qualified Lib.Version as Version
 import qualified Prelude
@@ -258,23 +259,23 @@ handleOpts printer (Opts opt) body = do
         verifyValidFlags flags (optWiths opt ++ optWithouts opt)
         body db opt requested finalMakefilePath makefile
 
-handleRequested :: Buildsome -> Printer -> Requested -> IO ()
-handleRequested buildsome printer RequestedClean = Buildsome.clean printer buildsome
+handleRequested :: Buildsome -> Parallelism.TokenCell -> Printer -> Requested -> IO ()
+handleRequested buildsome _ printer RequestedClean = Buildsome.clean printer buildsome
 handleRequested
-  buildsome printer
+  buildsome token printer
   (RequestedTargets
    (TargetsRequest requestedTargetPaths reason
     (Opts.ExtraOutputs mChartPath mClangCommandsPath compatMakefile)))
   = do
-    Buildsome.BuiltTargets rootTargets slaveStats <-
-      Buildsome.want printer buildsome reason requestedTargetPaths
-    maybe (return ()) (Chart.make slaveStats) mChartPath
-    cwd <- Posix.getWorkingDirectory
-    maybe (return ()) (ClangCommands.make cwd slaveStats rootTargets) mClangCommandsPath
-    case compatMakefile of
-      Opts.NoCompatMakefile -> return ()
-      Opts.CompatMakefile ->
-        CompatMakefile.make (Buildsome.bsPhoniesSet buildsome) cwd slaveStats rootTargets "compat-makefile"
+      Buildsome.BuiltTargets rootTargets slaveStats <-
+        Buildsome.want printer buildsome token reason requestedTargetPaths
+      maybe (return ()) (Chart.make slaveStats) mChartPath
+      cwd <- Posix.getWorkingDirectory
+      maybe (return ()) (ClangCommands.make cwd slaveStats rootTargets) mClangCommandsPath
+      case compatMakefile of
+        Opts.NoCompatMakefile -> return ()
+        Opts.CompatMakefile ->
+          CompatMakefile.make (Buildsome.bsPhoniesSet buildsome) cwd slaveStats rootTargets "compat-makefile"
 
 main :: IO ()
 main = do
@@ -285,5 +286,5 @@ main = do
   handleOpts printer opts $
     \db opt requested finalMakefilePath makefile -> do
       setBuffering
-      Buildsome.with printer db finalMakefilePath makefile opt $ \buildsome ->
-        handleRequested buildsome printer requested
+      Buildsome.with printer db finalMakefilePath makefile opt $ \buildsome token ->
+        handleRequested buildsome token printer requested

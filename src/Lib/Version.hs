@@ -4,7 +4,7 @@ module Lib.Version
   ( version
   ) where
 
-import Control.Applicative ((<$>))
+-- import Control.Applicative ((<$>))
 import Data.ByteString.Char8 (ByteString)
 import Language.Haskell.TH
 import qualified System.Process as Process

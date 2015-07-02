@@ -8,9 +8,9 @@ module Lib.Parallelism
   , withReleased
   ) where
 
--- -- import           Control.Concurrent.MVar
+import           Control.Concurrent.MVar
 -- -- import qualified Control.Exception as E
--- -- import           Control.Monad
+import           Control.Monad
 import           Data.IORef
 import           Lib.Exception (bracket, bracket_, finally)
 -- -- import           Lib.IORef (atomicModifyIORef_)
@@ -24,7 +24,7 @@ type Pool = PoolAlloc ParId
 
 data TokenCellState
     = TokenCellAlloced ParId
-    -- | TokenCellReleasedToChildren Int
+    | TokenCellReleasedToChildren Int
     -- | TokenCellFinished -- released back to parent
 
 newtype TokenCell = TokenCell
@@ -32,6 +32,9 @@ newtype TokenCell = TokenCell
     }
 
 data WaitContext = WaitContext
+    { wcChildCount :: IORef Int
+    , wcParentFinishAlloc :: MVar (IO ParId)
+    }
 
 data Fork = Fork
     { forkPool :: Pool
@@ -49,13 +52,27 @@ rootTokenCell pool =
         return $ TokenCell state
 
 connectForksToParent :: WaitContext -> [Fork] -> IO ()
-connectForksToParent _waitContext _forks = undefined
+connectForksToParent waitContext forks = do
+    isEmptyFinishAlloc <- isEmptyMVar $ wcParentFinishAlloc waitContext
+    when (not isEmptyFinishAlloc) $ error "Already have a resume token ready!"
 
-releaseToken :: TokenCell -> IO ()
-releaseToken _token = undefined
+    atomicModifyIORef' (wcChildCount waitContext) $ \old -> (old + length forks, ())
+    forM_ forks $ \fork -> modifyIORef (forkParents fork) (waitContext:)
+
+
+releaseToken :: Pool -> TokenCell -> IO ()
+releaseToken pool tokenCell =
+    join $ atomicModifyIORef (tokenCellState tokenCell) $
+              \state -> case state of
+                          TokenCellAlloced parId -> (TokenCellReleasedToChildren 1, PoolAlloc.release pool parId)
+                          TokenCellReleasedToChildren n -> (TokenCellReleasedToChildren (n + 1), return ())
 
 regainToken :: WaitContext -> IO ()
-regainToken _waitContext = undefined
+regainToken waitContext =
+    do finishAlloc <- readMVar $ wcParentFinishAlloc waitContext
+       _ <- finishAlloc -- TODO
+       return ()
+
 
 -- NOTE: withReleased may be called multiple times on the same Cell,
 -- concurrently. This is allowed, but the parallelism will only be
@@ -66,16 +83,19 @@ regainToken _waitContext = undefined
 -- happens anywhere whenever there is hidden concurrency in a build
 -- step, so it's not a big deal.
 
-withReleased :: TokenCell -> Priority -> [Fork] -> IO a -> IO a
-withReleased token priority forks =
-    do
-        waitContext <- return WaitContext
-        let beforeRelease =
+withReleased :: Pool -> TokenCell -> Priority -> [Fork] -> IO a -> IO a
+withReleased pool token priority forks action =
+    do  mvar <- newEmptyMVar
+        count <- newIORef 0
+        let waitContext = WaitContext
+                          { wcChildCount = count
+                          , wcParentFinishAlloc = mvar }
+            beforeRelease =
                 do
                     connectForksToParent waitContext forks
-                    releaseToken token
+                    releaseToken pool token
             afterRelease = regainToken waitContext -- we already got it from children
-        bracket_ beforeRelease afterRelease
+        bracket_ beforeRelease afterRelease action
 
 wrapForkedChild :: Fork -> (TokenCell -> IO r) -> IO r
 wrapForkedChild child =

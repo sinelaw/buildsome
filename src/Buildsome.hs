@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables, DeriveDataTypeable, RecordWildCards, OverloadedStrings #-}
 module Buildsome
-  ( Buildsome(bsPhoniesSet), with, withDb
+  ( Buildsome(bsParPool, bsPhoniesSet), with, withDb
   , clean
   , BuiltTargets(..)
   , want
@@ -322,10 +322,10 @@ slaveReqForAccessType FSHook.AccessTypeStat =
 -- TODO: All 3 applications of this function concat in the same
 -- pattern, reduce code duplication
 waitForSlavesWithParReleased ::
-  Parallelism.TokenCell -> Parallelism.Priority -> [(Parallelism.Fork, Slave Stats)] -> IO BuiltTargets
-waitForSlavesWithParReleased _ _ [] = return mempty
-waitForSlavesWithParReleased token priority forkedSlaves =
-  Parallelism.withReleased token priority forks $
+  Parallelism.Pool -> Parallelism.TokenCell -> Parallelism.Priority -> [(Parallelism.Fork, Slave Stats)] -> IO BuiltTargets
+waitForSlavesWithParReleased _ _ _ [] = return mempty
+waitForSlavesWithParReleased pool token priority forkedSlaves =
+  Parallelism.withReleased pool token priority forks $
   do
     stats <- mconcat <$> mapM Slave.wait slaves
     return BuiltTargets { builtTargets = map Slave.target slaves, builtStats = stats }
@@ -334,11 +334,11 @@ waitForSlavesWithParReleased token priority forkedSlaves =
     slaves = map snd forkedSlaves
 
 buildExplicitWithParReleased ::
-  BuildTargetEnv -> Parallelism.TokenCell -> [SlaveRequest] ->
+  BuildTargetEnv -> Parallelism.Pool -> Parallelism.TokenCell -> [SlaveRequest] ->
   IO (ExplicitPathsBuilt, BuiltTargets)
-buildExplicitWithParReleased bte@BuildTargetEnv{..} token inputs = do
+buildExplicitWithParReleased bte@BuildTargetEnv{..} pool token inputs = do
   built <-
-    waitForSlavesWithParReleased token btePriority .
+    waitForSlavesWithParReleased pool token btePriority .
     concat =<< mapM (slavesFor bte) inputs
   explicitPathsBuilt <- assertExplicitInputsExist bte $ map inputFilePath inputs
   return (explicitPathsBuilt, built)
