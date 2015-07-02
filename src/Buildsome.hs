@@ -24,7 +24,7 @@ import           Buildsome.Slave (Slave)
 import qualified Buildsome.Slave as Slave
 import           Buildsome.Stats (Stats(Stats))
 import qualified Buildsome.Stats as Stats
-import           Control.Applicative ((<$>))
+-- import           Control.Applicative ((<$>))
 import           Control.Concurrent (forkIO)
 import           Control.Concurrent.Async (mapConcurrently)
 import qualified Control.Exception as E
@@ -43,7 +43,7 @@ import qualified Data.Set as S
 import           Data.String (IsString(..))
 import           Data.Time (DiffTime)
 import           Data.Time.Clock.POSIX (POSIXTime)
-import           Data.Traversable (traverse)
+-- import           Data.Traversable (traverse)
 import           Data.Typeable (Typeable)
 import           Lib.AnnotatedException (annotateException)
 import qualified Lib.Cmp as Cmp
@@ -334,11 +334,11 @@ waitForSlavesWithParReleased pool token priority forkedSlaves =
     slaves = map snd forkedSlaves
 
 buildExplicitWithParReleased ::
-  BuildTargetEnv -> Parallelism.Pool -> Parallelism.TokenCell -> [SlaveRequest] ->
+  BuildTargetEnv -> Parallelism.TokenCell -> [SlaveRequest] ->
   IO (ExplicitPathsBuilt, BuiltTargets)
-buildExplicitWithParReleased bte@BuildTargetEnv{..} pool token inputs = do
+buildExplicitWithParReleased bte@BuildTargetEnv{..} token inputs = do
   built <-
-    waitForSlavesWithParReleased pool token btePriority .
+    waitForSlavesWithParReleased (bsParPool bteBuildsome) token btePriority .
     concat =<< mapM (slavesFor bte) inputs
   explicitPathsBuilt <- assertExplicitInputsExist bte $ map inputFilePath inputs
   return (explicitPathsBuilt, built)
@@ -543,7 +543,7 @@ executionLogBuildInputs bte@BuildTargetEnv{..} token TargetDesc{..} Db.Execution
   -- inputs changed, as it may build stuff that's no longer
   -- required:
   speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
-  waitForSlavesWithParReleased token btePriority speculativeSlaves
+  waitForSlavesWithParReleased (bsParPool bteBuildsome) token btePriority speculativeSlaves
   where
     mkInputSlavesFor desc inputPath =
       case fromFileDesc desc of
@@ -582,7 +582,7 @@ buildManyWithParReleased ::
   Parallelism.TokenCell -> [SlaveRequest] -> IO BuiltTargets
 buildManyWithParReleased mkReason bte@BuildTargetEnv{..} token slaveRequests =
   do
-    waitForSlavesWithParReleased token btePriority =<<
+    waitForSlavesWithParReleased (bsParPool bteBuildsome) token btePriority =<<
       fmap concat (mapM mkSlave slaveRequests)
   where
     mkSlave req =

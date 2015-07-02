@@ -4,7 +4,7 @@ module Main (main) where
 import Buildsome (Buildsome)
 import Buildsome.Db (Db, Reason)
 import Buildsome.Opts (Opts(..), Opt(..))
-import Control.Applicative (Applicative(..), (<$>))
+--import Control.Applicative (Applicative(..), (<$>))
 import Control.Monad
 import Data.ByteString (ByteString)
 import Data.List (foldl')

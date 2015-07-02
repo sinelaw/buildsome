@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Lib.Parallelism
   ( ParId
@@ -12,8 +13,8 @@ import           Control.Concurrent.MVar
 -- -- import qualified Control.Exception as E
 import           Control.Monad
 import           Data.IORef
-import           Lib.Exception (bracket, bracket_, finally)
--- -- import           Lib.IORef (atomicModifyIORef_)
+import           Lib.Exception (bracket, bracket_) --, finally)
+import           Lib.IORef (atomicModifyIORef'_)
 import           Lib.PoolAlloc (PoolAlloc, Priority(..))
 import qualified Lib.PoolAlloc as PoolAlloc
 -- -- import           Lib.Printer (Printer)
@@ -25,7 +26,7 @@ type Pool = PoolAlloc ParId
 data TokenCellState
     = TokenCellAlloced ParId
     | TokenCellReleasedToChildren Int
-    -- | TokenCellFinished -- released back to parent
+    | TokenCellFinished -- released back to parent
 
 newtype TokenCell = TokenCell
     { tokenCellState :: IORef TokenCellState
@@ -33,6 +34,7 @@ newtype TokenCell = TokenCell
 
 data WaitContext = WaitContext
     { wcChildCount :: IORef Int
+    , wcPriority :: Priority
     , wcParentFinishAlloc :: MVar (IO ParId)
     }
 
@@ -56,8 +58,8 @@ connectForksToParent waitContext forks = do
     isEmptyFinishAlloc <- isEmptyMVar $ wcParentFinishAlloc waitContext
     when (not isEmptyFinishAlloc) $ error "Already have a resume token ready!"
 
-    atomicModifyIORef' (wcChildCount waitContext) $ \old -> (old + length forks, ())
-    forM_ forks $ \fork -> modifyIORef (forkParents fork) (waitContext:)
+    atomicModifyIORef'_ (wcChildCount waitContext) (+ length forks)
+    forM_ forks $ \child -> atomicModifyIORef'_ (forkParents child) (waitContext:)
 
 
 releaseToken :: Pool -> TokenCell -> IO ()
@@ -66,6 +68,7 @@ releaseToken pool tokenCell =
               \state -> case state of
                           TokenCellAlloced parId -> (TokenCellReleasedToChildren 1, PoolAlloc.release pool parId)
                           TokenCellReleasedToChildren n -> (TokenCellReleasedToChildren (n + 1), return ())
+                          TokenCellFinished -> error "TokenCellFinished???" -- TODO
 
 regainToken :: WaitContext -> IO ()
 regainToken waitContext =
@@ -89,7 +92,9 @@ withReleased pool token priority forks action =
         count <- newIORef 0
         let waitContext = WaitContext
                           { wcChildCount = count
-                          , wcParentFinishAlloc = mvar }
+                          , wcParentFinishAlloc = mvar
+                          , wcPriority = priority
+                          }
             beforeRelease =
                 do
                     connectForksToParent waitContext forks
@@ -105,13 +110,23 @@ wrapForkedChild child =
         beforeChild = fmap TokenCell . newIORef . TokenCellAlloced =<< forkFinishAlloc child
         afterChild token =
             do
-                state <- readIORef $ tokenCellState token
-                case state of
-                    TokenCellAlloced parId ->
-                        do
-                            -- allocForParents??
-                            PoolAlloc.release pool parId
-                    -- _ -> error "Child lost its token!"
+                join $ atomicModifyIORef (tokenCellState token)
+                     $ \oldState ->
+                       case oldState of
+                         TokenCellAlloced parId ->
+                           (TokenCellFinished, ) $
+                              do  wcs <- readIORef $ forkParents child
+                                  forM_ wcs $ \wc ->
+                                      do join $ atomicModifyIORef (wcChildCount wc)
+                                              $ \n -> (n - 1,)
+                                              $ if n == 1 then
+                                                    do parentFinishAlloc <- PoolAlloc.startAlloc (wcPriority wc) pool
+                                                       putMVar (wcParentFinishAlloc wc) parentFinishAlloc
+                                                else if n > 1 then return()
+                                                     else error ("prev child count was less than 1: " ++ show n)
+                                         PoolAlloc.release pool parId
+                         TokenCellReleasedToChildren _ -> (oldState, error "Child lost its token!")
+                         TokenCellFinished -> (oldState, return ())
 
 -- | Must call wrapForkedChild at the child context!
 fork :: Pool -> Priority -> IO Fork
