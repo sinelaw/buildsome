@@ -1,16 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Lib.Parallelism
   ( ParId
+  , Pool, newPool
   , Priority(..)
+  , Fork(..), fork, wrapForkedChild
   , TokenCell, rootTokenCell
-  , WaitContext, newWaitContext, startFork, withReleased
+  , withReleased
   ) where
 
 -- -- import           Control.Concurrent.MVar
 -- -- import qualified Control.Exception as E
 -- -- import           Control.Monad
 import           Data.IORef
--- -- import           Lib.Exception (bracket, bracket_, finally)
+import           Lib.Exception (bracket, bracket_, finally)
 -- -- import           Lib.IORef (atomicModifyIORef_)
 import           Lib.PoolAlloc (PoolAlloc, Priority(..))
 import qualified Lib.PoolAlloc as PoolAlloc
@@ -18,34 +20,42 @@ import qualified Lib.PoolAlloc as PoolAlloc
 -- -- import qualified Lib.Printer as Printer
 
 type ParId = Int
--- type Pool = PoolAlloc ParId
+type Pool = PoolAlloc ParId
 
--- data TokenCellState
---     = TokenCellAlloced ParId
---     | TokenCellReleased
+data TokenCellState
+    = TokenCellAlloced ParId
+    -- | TokenCellReleasedToChildren Int
+    -- | TokenCellFinished -- released back to parent
 
-data TokenCell = TokenCell
-    { tokenPool :: PoolAlloc ParId
---    , tokenParId :: IORef TokenCellState
+newtype TokenCell = TokenCell
+    { tokenCellState :: IORef TokenCellState
     }
 
--- | represents a single "wait" for children
 data WaitContext = WaitContext
-    { _wcTokenCell :: TokenCell
+
+data Fork = Fork
+    { forkPool :: Pool
+    , forkParents :: IORef [WaitContext]
+    , forkFinishAlloc :: IO ParId
     }
 
-rootTokenCell :: ParId -> IO TokenCell
-rootTokenCell n =
-    do
-        pool <- PoolAlloc.new [1..n]
-        _parId <- newIORef =<< PoolAlloc.alloc (Priority 0) pool
-        return TokenCell
-            { tokenPool = pool
---            , tokenParId = parId
-            }
+newPool :: ParId -> IO Pool
+newPool n = PoolAlloc.new [1..n]
 
-newWaitContext :: TokenCell -> IO WaitContext
-newWaitContext = return . WaitContext
+rootTokenCell :: Pool -> IO TokenCell
+rootTokenCell pool =
+    do
+        state <- newIORef . TokenCellAlloced =<< PoolAlloc.alloc (Priority 0) pool
+        return $ TokenCell state
+
+connectForksToParent :: WaitContext -> [Fork] -> IO ()
+connectForksToParent _waitContext _forks = undefined
+
+releaseToken :: TokenCell -> IO ()
+releaseToken _token = undefined
+
+regainToken :: WaitContext -> IO ()
+regainToken _waitContext = undefined
 
 -- NOTE: withReleased may be called multiple times on the same Cell,
 -- concurrently. This is allowed, but the parallelism will only be
@@ -56,10 +66,41 @@ newWaitContext = return . WaitContext
 -- happens anywhere whenever there is hidden concurrency in a build
 -- step, so it's not a big deal.
 
--- This must be used exactly once on the WaitContext, after which it is unusable
-withReleased :: WaitContext -> Priority -> IO a -> IO a
-withReleased _waitContext _priority _body = undefined
-    -- bracket
+withReleased :: TokenCell -> Priority -> [Fork] -> IO a -> IO a
+withReleased token priority forks =
+    do
+        waitContext <- return WaitContext
+        let beforeRelease =
+                do
+                    connectForksToParent waitContext forks
+                    releaseToken token
+            afterRelease = regainToken waitContext -- we already got it from children
+        bracket_ beforeRelease afterRelease
 
-startFork :: WaitContext -> Priority -> IO ((TokenCell -> IO r) -> IO r)
-startFork = undefined
+wrapForkedChild :: Fork -> (TokenCell -> IO r) -> IO r
+wrapForkedChild child =
+    bracket beforeChild afterChild
+    where
+        pool = forkPool child
+        beforeChild = fmap TokenCell . newIORef . TokenCellAlloced =<< forkFinishAlloc child
+        afterChild token =
+            do
+                state <- readIORef $ tokenCellState token
+                case state of
+                    TokenCellAlloced parId ->
+                        do
+                            -- allocForParents??
+                            PoolAlloc.release pool parId
+                    -- _ -> error "Child lost its token!"
+
+-- | Must call wrapForkedChild at the child context!
+fork :: Pool -> Priority -> IO Fork
+fork pool priority =
+    do
+        finishAlloc <- PoolAlloc.startAlloc priority pool
+        parents <- newIORef []
+        return Fork
+            { forkPool = pool
+            , forkParents = parents
+            , forkFinishAlloc = finishAlloc
+            }
