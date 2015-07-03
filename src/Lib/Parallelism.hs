@@ -14,7 +14,7 @@ import           Control.Monad
 import           Data.IORef
 import           Lib.Exception (bracket, bracket_, finally, onException)
 import           Lib.IORef (atomicModifyIORef_)
-import           Lib.PoolAlloc (PoolAlloc, Priority(..))
+import           Lib.PoolAlloc (Alloc, PoolAlloc, Priority(..))
 import qualified Lib.PoolAlloc as PoolAlloc
 
 type ParId = Int
@@ -33,7 +33,7 @@ newtype TokenCell = TokenCell
 data WaitContext = WaitContext
     { wcPriority :: Priority
     , wcChildCount :: IORef Int
-    , wcParentFinishAlloc :: MVar (IO ParId)
+    , wcParentAlloc :: MVar (Alloc ParId)
     }
 
 data ForkState = ForkStarted [WaitContext] | ForkDone
@@ -43,7 +43,7 @@ data Fork = Fork
     , forkState :: IORef ForkState
     , -- This is only valid between the fork call and the
       -- wrapForkedChild
-      forkFinishAlloc :: IO ParId
+      forkAlloc :: Alloc ParId
     }
 
 newPool :: ParId -> IO Pool
@@ -59,26 +59,26 @@ waitContextDone :: PoolAlloc ParId -> WaitContext -> IO ()
 waitContextDone pool wc =
     do
         -- Allocate on behalf of parent
-        parentFinishAlloc <- PoolAlloc.startAlloc (wcPriority wc) pool
-        putMVar (wcParentFinishAlloc wc) parentFinishAlloc
+        parentAlloc <- PoolAlloc.startAlloc (wcPriority wc) pool
+        putMVar (wcParentAlloc wc) parentAlloc
 
 cancelParentAllocation :: Pool -> WaitContext -> IO ()
 cancelParentAllocation pool wc =
     do
         -- The children were unlinked, so nobody can fill the mvar
         -- anymore, so this is not a race:
-        mFinishAlloc <- tryTakeMVar (wcParentFinishAlloc wc)
-        case mFinishAlloc of
+        mAlloc <- tryTakeMVar (wcParentAlloc wc)
+        case mAlloc of
             Nothing ->
                 -- children didn't start alloc for us, nothing to do
                 return ()
-            Just finishAlloc ->
+            Just alloc ->
                 -- children started alloc for us before we managed to
                 -- unlink them. There's no facility to cancel a
                 -- started allocation, but we can at least detach it
                 -- to a background thread that just allocates to
                 -- release:
-                void $ forkIO $ finishAlloc >>= PoolAlloc.release pool
+                void $ forkIO $ PoolAlloc.finish alloc >>= PoolAlloc.release pool
 
 notifyParentChildDone :: PoolAlloc ParId -> WaitContext -> IO ()
 notifyParentChildDone pool wc =
@@ -112,10 +112,10 @@ unlinkChild wc child =
     atomicModifyIORef_ (forkState child) $ \oldState ->
     case oldState of
     ForkStarted parents ->
-        ForkStarted $ filter ((myMVar /=) . wcParentFinishAlloc) parents
+        ForkStarted $ filter ((myMVar /=) . wcParentAlloc) parents
     ForkDone -> ForkDone
     where
-        myMVar = wcParentFinishAlloc wc
+        myMVar = wcParentAlloc wc
 
 modifyTokenState :: TokenCell -> (TokenCellState -> (TokenCellState, IO a)) -> IO a
 modifyTokenState token = join . atomicModifyIORef (tokenCellState token)
@@ -140,7 +140,7 @@ regainToken token wc =
             case state of
             TokenCellReleasedToChildren 0 ->
                 ( TokenCellAllocating mvar
-                , (join (takeMVar (wcParentFinishAlloc wc)) >>= setAlloced)
+                , (takeMVar (wcParentAlloc wc) >>= PoolAlloc.finish >>= setAlloced)
                   `finally` putMVar mvar ()
                 )
             TokenCellReleasedToChildren n ->
@@ -169,7 +169,7 @@ withReleased pool token priority children action =
         let wc = WaitContext
                 { wcPriority = priority
                 , wcChildCount = childCount
-                , wcParentFinishAlloc = mvar
+                , wcParentAlloc = mvar
                 }
             beforeRelease =
                 do
@@ -201,7 +201,7 @@ wrapForkedChild child =
                 -- This blocks and may be interruptible legitimately
                 -- by an exception and then cancelFork will make sure
                 -- nobody waits for us forever
-                parId <- forkFinishAlloc child
+                parId <- PoolAlloc.finish $ forkAlloc child
                 fmap TokenCell . newIORef $ TokenCellAlloced parId
         afterChild token =
             modifyTokenState token $
@@ -220,10 +220,10 @@ wrapForkedChild child =
 fork :: Pool -> Priority -> IO Fork
 fork pool priority =
     do
-        finishAlloc <- PoolAlloc.startAlloc priority pool
+        alloc <- PoolAlloc.startAlloc priority pool
         state <- newIORef $ ForkStarted []
         return Fork
             { forkPool = pool
             , forkState = state
-            , forkFinishAlloc = finishAlloc
+            , forkAlloc = alloc
             }
