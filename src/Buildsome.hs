@@ -82,6 +82,11 @@ import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
 import           System.Process (CmdSpec(..))
 import           Text.Parsec (SourcePos)
+import qualified Database.LevelDB.Base as LevelDB
+import qualified Buildsome.Db as Db
+import Lib.Binary (encode, decode)
+import Data.Default (def)
+import qualified Crypto.Hash.MD5 as MD5
 
 type Parents = [(TargetRep, Target, Reason)]
 
@@ -178,6 +183,7 @@ data BuildTargetEnv = BuildTargetEnv
   , bteExplicitlyDemanded :: Bool
   , bteSpeculative :: Bool
   , btePriority :: Parallelism.Priority
+  , bteExecutionLogCache :: IORef (Map ByteString (Maybe Db.ExecutionLog))
   }
 
 data BuiltTargets = BuiltTargets
@@ -220,6 +226,7 @@ want :: Printer -> Buildsome -> Reason -> [FilePath] -> IO BuiltTargets
 want printer buildsome reason paths = {-# SCC want #-} do
   printStrLn printer $
     "Building: " <> ColorText.intercalate ", " (map (cTarget . show) paths)
+  elCache <- newIORef M.empty
   let priority = 0
       bte =
         BuildTargetEnv
@@ -230,6 +237,7 @@ want printer buildsome reason paths = {-# SCC want #-} do
         , bteExplicitlyDemanded = True
         , btePriority = priority
         , bteSpeculative = False
+        , bteExecutionLogCache = elCache
         }
   token <- Parallelism.rootTokenCell $ bsParPool buildsome
   (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
@@ -597,7 +605,16 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} token slaveRequests =
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog bte@BuildTargetEnv{..} token TargetDesc{..} = {-# SCC findApplyExecutionLog #-} do
-  mExecutionLog <- {-# SCC findApplyExecutionLog_read #-} readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+  let decode' x = {-# SCC findApplyExecutionLog_decode #-} decode $! x
+      targetKey' = MD5.hash $ Lib.Makefile.targetCmds tdTarget
+  elCache <- readIORef bteExecutionLogCache
+  mExecutionLog <-
+      case M.lookup targetKey' elCache of
+      Nothing -> do
+          mExecutionLog' <- {-# SCC findApplyExecutionLog_read #-} fmap decode' <$> (LevelDB.get (Db.dbLevel $ bsDb bteBuildsome) def $ targetKey')
+          writeIORef bteExecutionLogCache $ M.insert targetKey' mExecutionLog' elCache
+          return mExecutionLog'
+      Just x -> return x
   case mExecutionLog of
     Nothing -> -- No previous execution log
       return Nothing
