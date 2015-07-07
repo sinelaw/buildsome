@@ -106,6 +106,7 @@ data Buildsome = Buildsome
   , bsFastKillBuild :: E.SomeException -> IO ()
   , bsRender :: ColorText -> ByteString
   , bsParPool :: Parallelism.Pool
+  , bsExecutionLogCache :: IORef (Map ByteString (Maybe Db.ExecutionLog))
   }
 
 data WaitOrCancel = Wait | CancelAndWait
@@ -183,7 +184,6 @@ data BuildTargetEnv = BuildTargetEnv
   , bteExplicitlyDemanded :: Bool
   , bteSpeculative :: Bool
   , btePriority :: Parallelism.Priority
-  , bteExecutionLogCache :: IORef (Map ByteString (Maybe Db.ExecutionLog))
   }
 
 data BuiltTargets = BuiltTargets
@@ -237,22 +237,26 @@ want printer buildsome reason paths = {-# SCC want #-} do
         , bteExplicitlyDemanded = True
         , btePriority = priority
         , bteSpeculative = False
-        , bteExecutionLogCache = elCache
         }
   token <- Parallelism.rootTokenCell $ bsParPool buildsome
-  (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
-    timeIt $ buildExplicitWithParReleased bte token $ map SlaveRequestDirect paths
-  let stdErrs = Stats.stdErr $ builtStats builtTargets
-      lastLinePrefix
-        | not (S.null stdErrs) =
-          cWarning $ "Build Successful, but with STDERR from: " <>
-          (cTarget . show . map BuildMaps.targetRepPath . S.toList) stdErrs
-        | otherwise =
-          cSuccess "Build Successful"
-  printStrLn printer $ mconcat
-    [ lastLinePrefix, ": "
-    , cTiming (show buildTime <> " seconds"), " total." ]
-  return builtTargets
+  let go = do
+        (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
+          timeIt $ buildExplicitWithParReleased bte token $ map SlaveRequestDirect paths
+        let stdErrs = Stats.stdErr $ builtStats builtTargets
+            lastLinePrefix
+              | not (S.null stdErrs) =
+                cWarning $ "Build Successful, but with STDERR from: " <>
+                (cTarget . show . map BuildMaps.targetRepPath . S.toList) stdErrs
+              | otherwise =
+                cSuccess "Build Successful"
+        printStrLn printer $ mconcat
+          [ lastLinePrefix, ": "
+          , cTiming (show buildTime <> " seconds"), " total." ]
+        --return builtTargets
+        putStrLn $ "Press enter to run again..."
+        _ <- getLine
+        go
+  go
   where
     Color.Scheme{..} = Color.scheme
 
@@ -607,12 +611,12 @@ findApplyExecutionLog :: BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -
 findApplyExecutionLog bte@BuildTargetEnv{..} token TargetDesc{..} = {-# SCC findApplyExecutionLog #-} do
   let decode' x = {-# SCC findApplyExecutionLog_decode #-} decode $! x
       targetKey' = MD5.hash $ Lib.Makefile.targetCmds tdTarget
-  elCache <- readIORef bteExecutionLogCache
+  elCache <- readIORef (bsExecutionLogCache bteBuildsome)
   mExecutionLog <-
       case M.lookup targetKey' elCache of
       Nothing -> do
           mExecutionLog' <- {-# SCC findApplyExecutionLog_read #-} fmap decode' <$> (LevelDB.get (Db.dbLevel $ bsDb bteBuildsome) def $ targetKey')
-          writeIORef bteExecutionLogCache $ M.insert targetKey' mExecutionLog' elCache
+          writeIORef (bsExecutionLogCache bteBuildsome) $ M.insert targetKey' mExecutionLog' elCache
           return mExecutionLog'
       Just x -> return x
   case mExecutionLog of
@@ -1148,6 +1152,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
     rootPath <- FilePath.canonicalizePath $ FilePath.takeDirectory makefilePath
     let buildMaps = BuildMaps.make makefile
     deleteRemovedOutputs printer db buildMaps
+    elCache <- newIORef M.empty
 
     runOnce <- once
     errorRef <- newIORef Nothing
@@ -1174,6 +1179,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
             Opts.DieQuickly -> killOnce "Build step failed, no -k specified"
         , bsRender = Printer.render printer
         , bsParPool = pool
+        , bsExecutionLogCache = elCache
         }
     withInstalledSigintHandler
       (killOnce "\nBuild interrupted by Ctrl-C, shutting down."
