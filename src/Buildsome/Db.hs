@@ -94,10 +94,13 @@ leakedOutputsRef :: Db -> IORef (Set FilePath)
 leakedOutputsRef = dbLeakedOutputs
 
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
-setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
+setKey db key val = {-# SCC db_setKey #-} LevelDB.put (dbLevel db) def key $ {-# SCC db_setKey_encode #-} encode val
 
 getKey :: Binary a => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey db key = {-# SCC db_getKey #-}
+    do b <- {-# SCC db_leveldb_get #-} LevelDB.get (dbLevel db) def key
+       return $ fmap decode' b
+    where decode' = {-# SCC db_getKey_decode #-} decode
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def

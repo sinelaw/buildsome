@@ -217,7 +217,7 @@ assertExplicitInputsExist BuildTargetEnv{..} paths = do
              | otherwise -> return ExplicitPathsNotBuilt
 
 want :: Printer -> Buildsome -> Reason -> [FilePath] -> IO BuiltTargets
-want printer buildsome reason paths = do
+want printer buildsome reason paths = {-# SCC want #-} do
   printStrLn printer $
     "Building: " <> ColorText.intercalate ", " (map (cTarget . show) paths)
   let priority = 0
@@ -387,7 +387,7 @@ handleLegalUnspecifiedOutputs BuildTargetEnv{..} target unspecifiedOutputs = do
 
 verifyTargetOutputs ::
   BuildTargetEnv -> Set FilePath -> Target -> IO (Set FilePath)
-verifyTargetOutputs bte@BuildTargetEnv{..} outputs target = do
+verifyTargetOutputs bte@BuildTargetEnv{..} outputs target = {-# SCC verifyTargetOutputs #-} do
   handleLegalUnspecifiedOutputs bte target $ S.toList unspecifiedOutputs
 
   -- Illegal unspecified that no longer exist need to be banned from
@@ -443,7 +443,7 @@ verifyFileDesc ::
   str -> FilePath -> Db.FileDesc ne desc ->
   (Posix.FileStatus -> desc -> EitherT (str, FilePath) m ()) ->
   EitherT (str, FilePath) m ()
-verifyFileDesc str filePath fileDesc existingVerify = do
+verifyFileDesc str filePath fileDesc existingVerify = {-# SCC verifyFileDesc #-} do
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case (mStat, fileDesc) of
     (Nothing, Db.FileDescNonExisting _) -> return ()
@@ -488,7 +488,7 @@ data ExecutionLogFailure
 tryApplyExecutionLog ::
   BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -> Db.ExecutionLog ->
   IO (Either ExecutionLogFailure (Db.ExecutionLog, BuiltTargets))
-tryApplyExecutionLog bte@BuildTargetEnv{..} token targetDesc executionLog = do
+tryApplyExecutionLog bte@BuildTargetEnv{..} token targetDesc executionLog = {-# SCC tryApplyExecutionLog #-} do
   runEitherT $ do
     builtTargets <-
       EitherT $
@@ -544,14 +544,14 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc ->
   Db.ExecutionLog -> IO BuiltTargets
-executionLogBuildInputs bte@BuildTargetEnv{..} token TargetDesc{..} Db.ExecutionLog {..} = do
+executionLogBuildInputs bte@BuildTargetEnv{..} token TargetDesc{..} Db.ExecutionLog {..} = {-# SCC executionLogBuildInputs #-} do
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
+  speculativeSlaves <- {-# SCC executionLogBuildInputs_speculativeSlaves #-} concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
   waitForSlavesWithParReleased bte token speculativeSlaves
   where
-    mkInputSlavesFor desc inputPath =
+    mkInputSlavesFor desc inputPath = {-# SCC executionLogBuildInputs_mkInputSlavesFor #-}
       case fromFileDesc desc of
         Nothing -> return []
         Just (depReason, accessType) ->
@@ -596,8 +596,8 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} token slaveRequests =
 -- TODO: Remember the order of input files' access so can iterate here
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
-findApplyExecutionLog bte@BuildTargetEnv{..} token TargetDesc{..} = do
-  mExecutionLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+findApplyExecutionLog bte@BuildTargetEnv{..} token TargetDesc{..} = {-# SCC findApplyExecutionLog #-} do
+  mExecutionLog <- {-# SCC findApplyExecutionLog_read #-} readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
   case mExecutionLog of
     Nothing -> -- No previous execution log
       return Nothing
@@ -657,10 +657,12 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
     -- action fully unmasks, whereas we need to become
     -- interruptible-masked (impossible from uninterruptibleMask in
     -- a thread).
+    {-# SCC getSlaveForTarget #-}
     do
       (fork, slave) <-
         SyncMap.insert (bsSlaveByTargetRep bteBuildsome) tdRep $
         panicOnError $ withTimeout $
+        {-# SCC getSlaveForTarget_insert #-}
         do
           -- SyncMap runs this uninterruptible, so should not block
           -- indefinitely.
@@ -774,7 +776,7 @@ recordOutputs ::
   Buildsome ->
   IORef (Map FilePath Reason) -> Reason ->
   Set FilePath -> Set FilePath -> IO ()
-recordOutputs buildsome outputsRef accessDoc targetOutputsSet paths = do
+recordOutputs buildsome outputsRef accessDoc targetOutputsSet paths = {-# SCC recordOutputs #-} do
   atomicModifyIORef'_ outputsRef $ mappend $ M.fromSet (const accessDoc) paths
   registerOutputs buildsome $ paths `S.intersection` targetOutputsSet
 
@@ -849,7 +851,7 @@ fsAccessHandlers outputsRef inputsRef builtTargetsRef bte@BuildTargetEnv{..} tok
           filter ((`M.notMember` recordedOutputs) . FSHook.inputPath) inputs
 
 runCmd :: BuildTargetEnv -> Parallelism.TokenCell -> Target -> IO RunCmdResults
-runCmd bte@BuildTargetEnv{..} token target = do
+runCmd bte@BuildTargetEnv{..} token target = {-# SCC runCmd #-} do
   inputsRef <- newIORef M.empty
   outputsRef <- newIORef M.empty
   builtTargetsRef <- newIORef mempty
@@ -996,6 +998,7 @@ buildTargetReal bte@BuildTargetEnv{..} token TargetDesc{..} =
 
 buildTarget :: BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -> IO Stats
 buildTarget bte@BuildTargetEnv{..} token TargetDesc{..} =
+  {-# SCC buildTarget #-}
   maybeRedirectExceptions bte TargetDesc{..} $ do
     (explicitPathsBuilt, hintedBuiltTargets) <- buildTargetHints bte token tdTarget
     case explicitPathsBuilt of

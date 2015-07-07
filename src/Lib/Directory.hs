@@ -29,9 +29,9 @@ catchDoesNotExist act handler =
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
 getMFileStatus path = do
-  doesExist <- FilePath.exists path
+  doesExist <- {-# SCC getMFilesStatus_exists #-} FilePath.exists path
   if doesExist
-    then (Just <$> Posix.getFileStatus path) `catchDoesNotExist` return Nothing
+    then (Just <$> {-# SCC getMFilesStatus_getFileStatus #-} Posix.getFileStatus path) `catchDoesNotExist` return Nothing
     else return Nothing
 
 createDirectories :: FilePath -> IO ()

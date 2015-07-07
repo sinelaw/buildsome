@@ -134,7 +134,7 @@ switchDirectory makefilePath = do
     (cwd, file) = FilePath.splitFileName makefilePath
 
 parseMakefile :: Printer -> Db -> FilePath -> FilePath -> Makefile.Vars -> IO Makefile
-parseMakefile printer db origMakefilePath finalMakefilePath vars = do
+parseMakefile printer db origMakefilePath finalMakefilePath vars = {-# SCC parseMakefile #-} do
   cwd <- Posix.getWorkingDirectory
   let absFinalMakefilePath = cwd </> finalMakefilePath
   (parseTime, (isHit, makefile)) <- timeIt $ do
