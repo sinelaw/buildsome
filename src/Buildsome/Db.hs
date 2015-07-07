@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
 module Buildsome.Db
-  ( Db(..), with
+  ( Db, with
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..)
   , OutputDesc(..)

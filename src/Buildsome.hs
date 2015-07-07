@@ -82,11 +82,6 @@ import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
 import           System.Process (CmdSpec(..))
 import           Text.Parsec (SourcePos)
-import qualified Database.LevelDB.Base as LevelDB
-import qualified Buildsome.Db as Db
-import Lib.Binary (encode, decode)
-import Data.Default (def)
-import qualified Crypto.Hash.MD5 as MD5
 
 type Parents = [(TargetRep, Target, Reason)]
 
@@ -106,7 +101,6 @@ data Buildsome = Buildsome
   , bsFastKillBuild :: E.SomeException -> IO ()
   , bsRender :: ColorText -> ByteString
   , bsParPool :: Parallelism.Pool
-  , bsExecutionLogCache :: IORef (Map ByteString (Maybe Db.ExecutionLog))
   }
 
 data WaitOrCancel = Wait | CancelAndWait
@@ -226,7 +220,6 @@ want :: Printer -> Buildsome -> Reason -> [FilePath] -> IO BuiltTargets
 want printer buildsome reason paths = {-# SCC want #-} do
   printStrLn printer $
     "Building: " <> ColorText.intercalate ", " (map (cTarget . show) paths)
-  elCache <- newIORef M.empty
   let priority = 0
       bte =
         BuildTargetEnv
@@ -609,16 +602,7 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} token slaveRequests =
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.TokenCell -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog bte@BuildTargetEnv{..} token TargetDesc{..} = {-# SCC findApplyExecutionLog #-} do
-  let decode' x = {-# SCC findApplyExecutionLog_decode #-} decode $! x
-      targetKey' = MD5.hash $ Lib.Makefile.targetCmds tdTarget
-  elCache <- readIORef (bsExecutionLogCache bteBuildsome)
-  mExecutionLog <-
-      case M.lookup targetKey' elCache of
-      Nothing -> do
-          mExecutionLog' <- {-# SCC findApplyExecutionLog_read #-} fmap decode' <$> (LevelDB.get (Db.dbLevel $ bsDb bteBuildsome) def $ targetKey')
-          writeIORef (bsExecutionLogCache bteBuildsome) $ M.insert targetKey' mExecutionLog' elCache
-          return mExecutionLog'
-      Just x -> return x
+  mExecutionLog <- {-# SCC findApplyExecutionLog_read #-} readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
   case mExecutionLog of
     Nothing -> -- No previous execution log
       return Nothing
@@ -1152,7 +1136,6 @@ with printer db makefilePath makefile opt@Opt{..} body = do
     rootPath <- FilePath.canonicalizePath $ FilePath.takeDirectory makefilePath
     let buildMaps = BuildMaps.make makefile
     deleteRemovedOutputs printer db buildMaps
-    elCache <- newIORef M.empty
 
     runOnce <- once
     errorRef <- newIORef Nothing
@@ -1179,7 +1162,6 @@ with printer db makefilePath makefile opt@Opt{..} body = do
             Opts.DieQuickly -> killOnce "Build step failed, no -k specified"
         , bsRender = Printer.render printer
         , bsParPool = pool
-        , bsExecutionLogCache = elCache
         }
     withInstalledSigintHandler
       (killOnce "\nBuild interrupted by Ctrl-C, shutting down."
