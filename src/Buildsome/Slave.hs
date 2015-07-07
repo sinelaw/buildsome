@@ -23,10 +23,10 @@ import           Lib.Show (show)
 import           Lib.TimeInstances ()
 
 data Slave a = Slave
-  { slaveTarget :: Target
-  , slavePrinterId :: Printer.Id
+  { slaveTarget :: !Target
+  , slavePrinterId :: !Printer.Id
   , slaveOutputPaths :: [FilePath]
-  , slaveExecution :: Async a
+  , slaveExecution :: !(Async a)
   }
 
 target :: Slave a -> Target

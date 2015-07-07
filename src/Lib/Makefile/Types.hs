@@ -27,8 +27,8 @@ data TargetType output input = Target
   { targetOutputs :: [output]
   , targetInputs :: [input]
   , targetOrderOnlyInputs :: [input]
-  , targetCmds :: ByteString
-  , targetPos :: ParsecPos.SourcePos
+  , targetCmds :: !ByteString
+  , targetPos :: !ParsecPos.SourcePos
   } deriving (Show, Generic)
 instance (Binary output, Binary input) => Binary (TargetType output input)
 instance (NFData output, NFData input) => NFData (TargetType output input) where
@@ -37,13 +37,13 @@ instance (NFData output, NFData input) => NFData (TargetType output input) where
 type Target = TargetType FilePath FilePath
 
 data FilePattern = FilePattern
-  { filePatternDirectory :: FilePath
-  , filePatternFile :: StringPattern
+  { filePatternDirectory :: !FilePath
+  , filePatternFile :: !StringPattern
   } deriving (Show, Generic)
 instance Binary FilePattern
 instance NFData FilePattern where rnf = genericRnf
 
-data InputPat = InputPath FilePath | InputPattern FilePattern
+data InputPat = InputPath !FilePath | InputPattern !FilePattern
   deriving (Show, Generic)
 instance Binary InputPat
 instance NFData InputPat where rnf = genericRnf
@@ -58,7 +58,7 @@ data Makefile = Makefile
   { makefileTargets :: [Target]
   , makefilePatterns :: [Pattern]
   , makefilePhonies :: [(ParsecPos.SourcePos, FilePath)]
-  , makefileWeakVars :: Vars
+  , makefileWeakVars :: !Vars
   } deriving (Show, Generic)
 instance Binary Makefile
 instance NFData Makefile where rnf = genericRnf

@@ -17,7 +17,9 @@
 /* NOTE: This must be kept in sync with Protocol.hs */
 #define MAX_PATH 256
 
-/* Some libc's (such as musl) define the following as macros pointing to the non-64 versions: */
+/* Some libc's (such as musl) define the following as macros pointing to the non-64 versions. Our
+   overriding code will fail compilation on redefinition of a macro as a function if these are not
+   #undef'ed, so must undefine them: */
 #ifdef open64
 #undef open64
 #endif
@@ -47,6 +49,15 @@
 #endif
 #ifdef off64
 #undef off64
+#endif
+#ifdef stat64
+#undef stat64
+#endif
+#ifdef fstat64
+#undef fstat64
+#endif
+#ifdef lstat64
+#undef lstat64
 #endif
 
 static struct {
