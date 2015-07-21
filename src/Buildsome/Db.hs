@@ -5,6 +5,7 @@ module Buildsome.Db
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..)
   , OutputDesc(..)
+  , MTimeExecutionLog(..)
   , ExecutionLog(..), executionLog
   , FileContentDescCache(..), fileContentDescCache
   , Reason
@@ -78,6 +79,12 @@ data OutputDesc = OutputDesc
   , odContentDesc :: Maybe FileContentDesc -- Nothing if directory
   } deriving (Generic, Show)
 instance Binary OutputDesc
+
+data MTimeExecutionLog = MTimeExecutionLog
+  { elmInputMTimes :: [(FilePath, Maybe POSIXTime)]
+  , elmOutputMTimes :: [(FilePath, Maybe POSIXTime)]
+  } deriving (Generic, Show)
+instance Binary MTimeExecutionLog
 
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId

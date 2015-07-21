@@ -533,6 +533,23 @@ tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog = do
       executionLogVerifyFilesState bte targetDesc executionLog
     return (executionLog, builtTargets)
 
+
+-- mtimeExecutionLogUpToDate ::
+--     MonadIO m =>
+--     BuildTargetEnv -> TargetDesc -> Db.MTimeExecutionLog -> m (Maybe [FilePath])
+mtimeExecutionLogUpToDate
+  :: MonadIO f =>
+     t -> TargetDesc -> Db.MTimeExecutionLog -> f (Maybe [FilePath])
+mtimeExecutionLogUpToDate bte TargetDesc{..} Db.MTimeExecutionLog{..} =
+  sequence <$> do
+    forM elmInputMTimes $ \(filePath, mtime) -> do
+        fstat <- liftIO $ Dir.getMFileStatus filePath
+        let curMTime = Posix.modificationTimeHiRes <$> fstat
+        return $ if mtime == curMTime
+                 then Nothing
+                 else Just filePath
+
+
 executionLogVerifyFilesState ::
   MonadIO m =>
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
