@@ -915,10 +915,10 @@ runCmd bte@BuildTargetEnv{..} entity target = do
     Color.Scheme{..} = Color.scheme
 
 makeExecutionLog ::
-  Buildsome -> Target ->
+  Buildsome ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
   [FilePath] -> StdOutputs ByteString -> DiffTime -> IO Db.ExecutionLog
-makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
+makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
   inputsDescs <- M.traverseWithKey inputAccess inputs
   outputDescPairs <-
     forM outputs $ \outPath -> do
@@ -937,7 +937,6 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
       return (outPath, fileDesc)
   return Db.ExecutionLog
     { elBuildId = bsBuildId buildsome
-    , elCommand = targetCmds target
     , elInputsDescs = inputsDescs
     , elOutputsDescs = M.fromList outputDescPairs
     , elStdoutputs = stdOutputs
@@ -1020,7 +1019,7 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
 
     outputs <- verifyTargetSpec bte (M.keysSet rcrInputs) (M.keysSet rcrOutputs) tdTarget
     executionLog <-
-      makeExecutionLog bteBuildsome tdTarget rcrInputs (S.toList outputs)
+      makeExecutionLog bteBuildsome rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
     writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
 

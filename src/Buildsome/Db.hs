@@ -81,7 +81,6 @@ instance Binary OutputDesc
 
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
-  , elCommand :: ByteString -- Mainly for debugging
   , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
   , elOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
   , elStdoutputs :: StdOutputs ByteString
