@@ -433,11 +433,10 @@ warnOverSpecified BuildTargetEnv{..} str suffix unused pos =
 
 replayExecutionLog ::
   BuildTargetEnv -> Target ->
-  Set FilePath -> Set FilePath ->
-  StdOutputs ByteString -> DiffTime -> IO ()
-replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfTime =
-  Print.replay btePrinter target stdOutputs bteReason
-  (optVerbosity (bsOpts bteBuildsome)) selfTime $
+  Set FilePath -> Set FilePath -> IO ()
+replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs =
+  -- Print.replay btePrinter target stdOutputs bteReason
+  -- (optVerbosity (bsOpts bteBuildsome)) selfTime $
   -- We only register legal outputs that were CREATED properly in the
   -- execution log, so all outputs keep no old content
   void $ verifyTargetSpec bte inputs outputs target
@@ -557,10 +556,15 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.MTimeExecu
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
          db filePath stat) oldMContentDesc
-  liftIO $
-    replayExecutionLog bte tdTarget
-    (M.keysSet elmInputsDescs) (M.keysSet elmOutputsDescs)
-    (Db.elStdoutputs elmFullLog) (Db.elSelfTime elmFullLog)
+  -- mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+  -- case mFullLog of
+  --   Nothing -> error "oh noes."
+  --   Just fullLog ->
+  --     liftIO $
+  --     replayExecutionLog bte tdTarget
+  --     (M.keysSet elmInputsDescs) (M.keysSet elmOutputsDescs)
+  --     (Db.elStdoutputs fullLog) (Db.elSelfTime fullLog)
+  liftIO $ replayExecutionLog bte tdTarget (M.keysSet elmInputsDescs) (M.keysSet elmOutputsDescs)
   where
     db = bsDb bteBuildsome
     verifyMDesc _   _        _       Nothing        = return ()
@@ -582,7 +586,11 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.MTimeExe
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList $ Db.elInputsDescs elmFullLog)
+  mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+  fullLog <- case mFullLog of
+      Nothing -> error "Ouch!"
+      Just l -> return l
+  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList $ Db.elInputsDescs fullLog)
   waitForSlavesWithParReleased bte entity speculativeSlaves
   where
     mkInputSlavesFor desc inputPath =
@@ -917,7 +925,7 @@ runCmd bte@BuildTargetEnv{..} entity target = do
 makeExecutionLog ::
   Buildsome ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO Db.MTimeExecutionLog
+  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO (Db.MTimeExecutionLog, Db.ExecutionLog)
 makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
   inputsDescs <- M.traverseWithKey inputAccess inputs
   outputDescPairs <-
@@ -935,18 +943,19 @@ makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
                  db outPath stat
           return $ Db.FileDescExisting $ Db.OutputDesc (fileStatDescOfStat stat) mContentDesc
       return (outPath, fileDesc)
-  return Db.MTimeExecutionLog
-      { elmInputsDescs = M.map (Db.mapNonExisting $ const ()) inputsDescs
-      , elmOutputsDescs = M.map ((Db.mapNonExisting $ const ())) $ M.fromList outputDescPairs
-      , elmFullLog =
-          Db.ExecutionLog
-          { elBuildId = bsBuildId buildsome
-          , elInputsDescs = inputsDescs
-          , elOutputsDescs = M.fromList outputDescPairs
-          , elStdoutputs = stdOutputs
-          , elSelfTime = selfTime
-          }
-      }
+  return
+      ( Db.MTimeExecutionLog
+        { elmInputsDescs = M.map (Db.mapNonExisting $ const ()) inputsDescs
+        , elmOutputsDescs = M.map ((Db.mapNonExisting $ const ())) $ M.fromList outputDescPairs
+        }
+      , Db.ExecutionLog
+        { elBuildId = bsBuildId buildsome
+        , elInputsDescs = inputsDescs
+        , elOutputsDescs = M.fromList outputDescPairs
+        , elStdoutputs = stdOutputs
+        , elSelfTime = selfTime
+        }
+      )
   where
     db = bsDb buildsome
     assertFileMTime path oldMStat =
@@ -1013,7 +1022,7 @@ buildTargetHints bte@BuildTargetEnv{..} entity target =
     Color.Scheme{..} = Color.scheme
 
 buildTargetReal ::
-  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Db.MTimeExecutionLog, BuiltTargets)
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO ((Db.MTimeExecutionLog, Db.ExecutionLog), BuiltTargets)
 buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
   Print.targetWrap btePrinter bteReason tdTarget "BUILDING" $ do
     deleteOldTargetOutputs bte tdTarget
@@ -1023,13 +1032,14 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
     RunCmdResults{..} <- runCmd bte entity tdTarget
 
     outputs <- verifyTargetSpec bte (M.keysSet rcrInputs) (M.keysSet rcrOutputs) tdTarget
-    executionLog <-
+    (mLog, executionLog) <-
       makeExecutionLog bteBuildsome rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
-    writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) executionLog
+    writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
+    writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) mLog
 
     Print.targetTiming btePrinter "now" rcrSelfTime
-    return (executionLog, rcrBuiltTargets)
+    return ((mLog, executionLog), rcrBuiltTargets)
   where
     verbosityCommands = Opts.verbosityCommands verbosity
     verbosity = optVerbosity (bsOpts bteBuildsome)
@@ -1044,21 +1054,28 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
         return $ builtStats hintedBuiltTargets
       ExplicitPathsBuilt -> do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
-        (whenBuilt, (Db.MTimeExecutionLog{..}, builtTargets)) <-
+        (whenBuilt, ((Db.MTimeExecutionLog{..}, Db.ExecutionLog{..}), builtTargets)) <-
           case mSlaveStats of
-          Just res -> return (Stats.FromCache, res)
+          Just (mLog, res) ->
+            do
+                mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+                fullLog <- case mFullLog of
+                    Nothing -> error "Bummer."
+                    Just f -> return f
+                return (Stats.FromCache, ((mLog, fullLog), res))
           Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
         let BuiltTargets deps stats = hintedBuiltTargets <> builtTargets
+
         return $ stats <>
           Stats
           { Stats.ofTarget =
                M.singleton tdRep Stats.TargetStats
                { tsWhen = whenBuilt
-               , tsTime = Db.elSelfTime elmFullLog
+               , tsTime = elSelfTime
                , tsDirectDeps = deps
                }
           , Stats.stdErr =
-            if mempty /= stdErr (Db.elStdoutputs elmFullLog)
+            if mempty /= stdErr elStdoutputs
             then S.singleton tdRep
             else S.empty
           }

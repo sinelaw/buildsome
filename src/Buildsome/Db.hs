@@ -1,12 +1,12 @@
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric, OverloadedStrings, TupleSections #-}
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..), mapNonExisting
   , OutputDesc(..)
   , MTimeExecutionLog(..), mtimeExecutionLog
-  , ExecutionLog(..)
+  , ExecutionLog(..), executionLog
   , FileContentDescCache(..), fileContentDescCache
   , Reason
   , IRef(..)
@@ -84,10 +84,14 @@ data OutputDesc = OutputDesc
   } deriving (Generic, Show)
 instance Binary OutputDesc
 
+data ExecutionLogType =
+    LogTypeMTime | LogTypeFull
+    deriving (Generic, Show)
+instance Binary ExecutionLogType
+
 data MTimeExecutionLog = MTimeExecutionLog
   { elmInputsDescs :: Map FilePath (FileDesc () (POSIXTime, InputDesc))
   , elmOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
-  , elmFullLog :: ExecutionLog
   } deriving (Generic, Show)
 instance Binary MTimeExecutionLog
 
@@ -163,7 +167,10 @@ targetHash :: Makefile.TargetType output input -> ByteString
 targetHash = MD5.hash . Makefile.targetCmds
 
 mtimeExecutionLog :: Makefile.Target -> Db -> IRef MTimeExecutionLog
-mtimeExecutionLog = mkIRefKey . targetHash
+mtimeExecutionLog = mkIRefKey . encode . (LogTypeMTime, ) . targetHash
+
+executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
+executionLog = mkIRefKey . encode . (LogTypeFull, ) . targetHash
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
