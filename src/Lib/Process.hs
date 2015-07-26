@@ -3,7 +3,7 @@ module Lib.Process (getOutputs, Env, CmdSpec(..)) where
 
 import Control.Concurrent.Async
 import Control.Exception (uninterruptibleMask)
-import Control.Monad
+import Control.Monad (void, forM)
 import Data.Foldable (traverse_)
 import Lib.Exception (bracket, finally)
 import System.Environment (getEnv)

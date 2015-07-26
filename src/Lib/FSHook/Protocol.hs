@@ -14,7 +14,7 @@ module Lib.FSHook.Protocol
 import Prelude.Compat hiding (FilePath)
 
 
-import Control.Monad
+import Control.Monad (unless)
 import Data.Binary.Get
 import Data.Bits
 import Data.ByteString (ByteString)

@@ -13,7 +13,7 @@ module Buildsome.BuildMaps
 
 import Prelude.Compat hiding (FilePath)
 
-import Control.Monad
+import Control.Monad (mplus)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Maybe (mapMaybe)

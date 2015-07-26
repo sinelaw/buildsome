@@ -16,7 +16,7 @@ import Prelude.Compat hiding (show)
 import qualified Buildsome.Color as Color
 import           Buildsome.Db (Reason)
 import           Buildsome.Opts (Verbosity(..), PrintOutputs(..), PrintCommands(..))
-import           Control.Monad
+import           Control.Monad (unless, when)
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.Monoid

@@ -6,7 +6,7 @@ module Buildsome.Meddling
 
 import Prelude.Compat hiding (FilePath)
 
-import Control.Monad
+import Control.Monad (unless)
 import Data.Typeable (Typeable)
 import Lib.FileDesc (fileStatDescOfStat)
 import Lib.FilePath (FilePath)

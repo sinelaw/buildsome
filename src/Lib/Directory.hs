@@ -12,7 +12,7 @@ module Lib.Directory
 
 import Prelude.Compat hiding (FilePath)
 
-import Control.Monad
+import Control.Monad (unless)
 import Lib.Exception (bracket)
 import Lib.FilePath (FilePath, (</>))
 import System.IO.Error
