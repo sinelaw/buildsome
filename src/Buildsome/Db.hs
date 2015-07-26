@@ -92,6 +92,7 @@ instance Binary ExecutionLogType
 data MTimeExecutionLog = MTimeExecutionLog
   { elmInputsDescs :: Map FilePath (FileDesc () (POSIXTime, InputDesc))
   , elmOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
+  , elmSelfTime :: DiffTime
   } deriving (Generic, Show)
 instance Binary MTimeExecutionLog
 

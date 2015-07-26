@@ -947,6 +947,7 @@ makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
       ( Db.MTimeExecutionLog
         { elmInputsDescs = M.map (Db.mapNonExisting $ const ()) inputsDescs
         , elmOutputsDescs = M.map ((Db.mapNonExisting $ const ())) $ M.fromList outputDescPairs
+        , elmSelfTime = selfTime
         }
       , Db.ExecutionLog
         { elBuildId = bsBuildId buildsome
@@ -1054,16 +1055,13 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
         return $ builtStats hintedBuiltTargets
       ExplicitPathsBuilt -> do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
-        (whenBuilt, ((Db.MTimeExecutionLog{..}, Db.ExecutionLog{..}), builtTargets)) <-
+        (whenBuilt, (Db.MTimeExecutionLog{..}, builtTargets)) <-
           case mSlaveStats of
           Just (mLog, res) ->
-            do
-                mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
-                fullLog <- case mFullLog of
-                    Nothing -> error "Bummer."
-                    Just f -> return f
-                return (Stats.FromCache, ((mLog, fullLog), res))
-          Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
+              return (Stats.FromCache, (mLog, res))
+          Nothing -> do
+              ((mlog, _), bt) <- buildTargetReal bte entity TargetDesc{..}
+              return (Stats.BuiltNow, (mlog, bt))
         let BuiltTargets deps stats = hintedBuiltTargets <> builtTargets
 
         return $ stats <>
@@ -1071,13 +1069,15 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
           { Stats.ofTarget =
                M.singleton tdRep Stats.TargetStats
                { tsWhen = whenBuilt
-               , tsTime = elSelfTime
+               , tsTime = elmSelfTime
                , tsDirectDeps = deps
                }
           , Stats.stdErr =
-            if mempty /= stdErr elStdoutputs
-            then S.singleton tdRep
-            else S.empty
+            -- TODO
+            -- if mempty /= stdErr elStdoutputs
+            -- then S.singleton tdRep
+            -- else
+            S.empty
           }
   where
     Color.Scheme{..} = Color.scheme
