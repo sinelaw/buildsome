@@ -925,7 +925,7 @@ runCmd bte@BuildTargetEnv{..} entity target = do
 makeExecutionLog ::
   Buildsome ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO (Db.MTimeExecutionLog, Db.ExecutionLog)
+  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO Db.ExecutionLog
 makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
   inputsDescs <- M.traverseWithKey inputAccess inputs
   outputDescPairs <-
@@ -944,19 +944,13 @@ makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
           return $ Db.FileDescExisting $ Db.OutputDesc (fileStatDescOfStat stat) mContentDesc
       return (outPath, fileDesc)
   return
-      ( Db.MTimeExecutionLog
-        { elmInputsDescs = M.map (Db.mapNonExisting $ const ()) inputsDescs
-        , elmOutputsDescs = M.map ((Db.mapNonExisting $ const ())) $ M.fromList outputDescPairs
-        , elmSelfTime = selfTime
-        }
-      , Db.ExecutionLog
-        { elBuildId = bsBuildId buildsome
-        , elInputsDescs = inputsDescs
-        , elOutputsDescs = M.fromList outputDescPairs
-        , elStdoutputs = stdOutputs
-        , elSelfTime = selfTime
-        }
-      )
+    Db.ExecutionLog
+    { elBuildId = bsBuildId buildsome
+    , elInputsDescs = inputsDescs
+    , elOutputsDescs = M.fromList outputDescPairs
+    , elStdoutputs = stdOutputs
+    , elSelfTime = selfTime
+    }
   where
     db = bsDb buildsome
     assertFileMTime path oldMStat =
@@ -965,7 +959,7 @@ makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
     inputAccess ::
       FilePath ->
       (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-      IO (Db.FileDesc Reason (POSIXTime, Db.InputDesc))
+      IO (Db.FileDesc Reason (POSIXTime, Db.InputDesc Db.Reason))
     inputAccess path (accessTypes, Nothing) = do
       let reason =
             case M.elems accessTypes of
@@ -1023,7 +1017,7 @@ buildTargetHints bte@BuildTargetEnv{..} entity target =
     Color.Scheme{..} = Color.scheme
 
 buildTargetReal ::
-  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO ((Db.MTimeExecutionLog, Db.ExecutionLog), BuiltTargets)
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Db.ExecutionLog, BuiltTargets)
 buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
   Print.targetWrap btePrinter bteReason tdTarget "BUILDING" $ do
     deleteOldTargetOutputs bte tdTarget
@@ -1033,14 +1027,15 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
     RunCmdResults{..} <- runCmd bte entity tdTarget
 
     outputs <- verifyTargetSpec bte (M.keysSet rcrInputs) (M.keysSet rcrOutputs) tdTarget
-    (mLog, executionLog) <-
+    executionLog <-
       makeExecutionLog bteBuildsome rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
     writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
-    writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) mLog
+
+    writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) $ Db.toMTimeExecutionLog executionLog
 
     Print.targetTiming btePrinter "now" rcrSelfTime
-    return ((mLog, executionLog), rcrBuiltTargets)
+    return (executionLog, rcrBuiltTargets)
   where
     verbosityCommands = Opts.verbosityCommands verbosity
     verbosity = optVerbosity (bsOpts bteBuildsome)
@@ -1060,8 +1055,8 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
           Just (mLog, res) ->
               return (Stats.FromCache, (mLog, res))
           Nothing -> do
-              ((mlog, _), bt) <- buildTargetReal bte entity TargetDesc{..}
-              return (Stats.BuiltNow, (mlog, bt))
+              (elog, bt) <- buildTargetReal bte entity TargetDesc{..}
+              return (Stats.BuiltNow, (Db.toMTimeExecutionLog elog, bt))
         let BuiltTargets deps stats = hintedBuiltTargets <> builtTargets
 
         return $ stats <>

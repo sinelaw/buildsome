@@ -1,12 +1,14 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveGeneric, OverloadedStrings, TupleSections #-}
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
-  , InputDesc(..), FileDesc(..), mapNonExisting
+  , InputDesc(..), FileDesc(..)
   , OutputDesc(..)
   , MTimeExecutionLog(..), mtimeExecutionLog
   , ExecutionLog(..), executionLog
+  , toMTimeExecutionLog
   , FileContentDescCache(..), fileContentDescCache
   , Reason
   , IRef(..)
@@ -40,6 +42,7 @@ import Lib.TimeInstances ()
 import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Set as S
+import qualified Data.Map as M
 import qualified Database.LevelDB.Base as LevelDB
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
@@ -61,12 +64,21 @@ instance Binary FileContentDescCache
 
 type Reason = ColorText
 
-data InputDesc = InputDesc
-  { idModeAccess :: Maybe (Reason, FileModeDesc)
-  , idStatAccess :: Maybe (Reason, FileStatDesc)
-  , idContentAccess :: Maybe (Reason, FileContentDesc)
+data InputDesc a = InputDesc
+  { idModeAccess :: Maybe (a, FileModeDesc)
+  , idStatAccess :: Maybe (a, FileStatDesc)
+  , idContentAccess :: Maybe (a, FileContentDesc)
   } deriving (Generic, Show)
-instance Binary InputDesc
+instance Binary a => Binary (InputDesc a)
+
+idDropReasons :: InputDesc a -> InputDesc ()
+idDropReasons InputDesc{..} =
+    InputDesc
+    { idModeAccess = fmap f idModeAccess
+    , idStatAccess = fmap f idStatAccess
+    , idContentAccess = fmap f idContentAccess
+    }
+    where f (_,b) = ((), b)
 
 data FileDesc ne e
   = FileDescNonExisting ne
@@ -74,9 +86,14 @@ data FileDesc ne e
   deriving (Generic, Eq, Ord, Show)
 instance (Binary ne, Binary e) => Binary (FileDesc ne e)
 
-mapNonExisting :: (a -> b) -> FileDesc a e -> FileDesc b e
-mapNonExisting f (FileDescNonExisting x) = FileDescNonExisting $ f x
-mapNonExisting _ (FileDescExisting e) = (FileDescExisting e)
+fdescMapNonExisting :: (a -> b) -> FileDesc a e -> FileDesc b e
+fdescMapNonExisting f (FileDescNonExisting x) = FileDescNonExisting $ f x
+fdescMapNonExisting _ (FileDescExisting e) = FileDescExisting e
+
+fdescMapExisting :: (a -> b) -> FileDesc ne a -> FileDesc ne b
+fdescMapExisting _ (FileDescNonExisting x) = FileDescNonExisting x
+fdescMapExisting f (FileDescExisting e) = FileDescExisting $ f e
+
 
 data OutputDesc = OutputDesc
   { odStatDesc :: FileStatDesc
@@ -90,7 +107,7 @@ data ExecutionLogType =
 instance Binary ExecutionLogType
 
 data MTimeExecutionLog = MTimeExecutionLog
-  { elmInputsDescs :: Map FilePath (FileDesc () (POSIXTime, InputDesc))
+  { elmInputsDescs :: Map FilePath (FileDesc () (POSIXTime, InputDesc ()))
   , elmOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
   , elmSelfTime :: DiffTime
   } deriving (Generic, Show)
@@ -98,12 +115,21 @@ instance Binary MTimeExecutionLog
 
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
-  , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
+  , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc Reason))
   , elOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
   , elStdoutputs :: StdOutputs ByteString
   , elSelfTime :: DiffTime
   } deriving (Generic, Show)
 instance Binary ExecutionLog
+
+toMTimeExecutionLog :: ExecutionLog -> MTimeExecutionLog
+toMTimeExecutionLog ExecutionLog{..} =
+  MTimeExecutionLog
+  { elmInputsDescs = M.map (fdescMapExisting f . (fdescMapNonExisting $ const ())) elInputsDescs
+  , elmOutputsDescs = M.map ((fdescMapNonExisting $ const ())) $ elOutputsDescs
+  , elmSelfTime = elSelfTime
+  }
+  where f (ptime, idesc) = (ptime, idDropReasons idesc)
 
 registeredOutputsRef :: Db -> IORef (Set FilePath)
 registeredOutputsRef = dbRegisteredOutputs
@@ -114,7 +140,7 @@ leakedOutputsRef = dbLeakedOutputs
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
 setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
 
-getKey :: Binary a => Db -> ByteString -> IO (Maybe a)
+getKey :: (Show a, Binary a) => Db -> ByteString -> IO (Maybe a)
 getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
 
 deleteKey :: Db -> ByteString -> IO ()
@@ -156,7 +182,7 @@ data IRef a = IRef
   , delIRef :: IO ()
   }
 
-mkIRefKey :: Binary a => ByteString -> Db -> IRef a
+mkIRefKey :: (Show a, Binary a) => ByteString -> Db -> IRef a
 mkIRefKey key db = IRef
   { readIRef = getKey db key
   , writeIRef = setKey db key
@@ -181,7 +207,7 @@ type MFileContentDesc = FileDesc () FileContentDesc
 data MakefileParseCache = MakefileParseCache
   { mpcInputs :: (FilePath, Map FilePath MFileContentDesc)
   , mpcOutput :: (Makefile, [PutStrLn])
-  } deriving (Generic)
+  } deriving (Generic, Show)
 instance Binary MakefileParseCache
 
 makefileParseCache :: Db -> Makefile.Vars -> IRef MakefileParseCache
