@@ -520,8 +520,8 @@ data ExecutionLogFailure
   | SpeculativeBuildFailure E.SomeException
 
 tryApplyExecutionLog ::
-  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Db.ExecutionLog ->
-  IO (Either ExecutionLogFailure (Db.ExecutionLog, BuiltTargets))
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Db.MTimeExecutionLog ->
+  IO (Either ExecutionLogFailure (Db.MTimeExecutionLog, BuiltTargets))
 tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog = do
   runEitherT $ do
     builtTargets <-
@@ -533,29 +533,12 @@ tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog = do
       executionLogVerifyFilesState bte targetDesc executionLog
     return (executionLog, builtTargets)
 
-
--- mtimeExecutionLogUpToDate ::
---     MonadIO m =>
---     BuildTargetEnv -> TargetDesc -> Db.MTimeExecutionLog -> m (Maybe [FilePath])
-mtimeExecutionLogUpToDate
-  :: MonadIO f =>
-     t -> TargetDesc -> Db.MTimeExecutionLog -> f (Maybe [FilePath])
-mtimeExecutionLogUpToDate bte TargetDesc{..} Db.MTimeExecutionLog{..} =
-  sequence <$> do
-    forM elmInputMTimes $ \(filePath, mtime) -> do
-        fstat <- liftIO $ Dir.getMFileStatus filePath
-        let curMTime = Posix.modificationTimeHiRes <$> fstat
-        return $ if mtime == curMTime
-                 then Nothing
-                 else Just filePath
-
-
 executionLogVerifyFilesState ::
   MonadIO m =>
-  BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
+  BuildTargetEnv -> TargetDesc -> Db.MTimeExecutionLog ->
   EitherT (ByteString, FilePath) m ()
-executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
-  forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
+executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.MTimeExecutionLog{..} = do
+  forM_ (M.toList elmInputsDescs) $ \(filePath, desc) ->
     verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
         let verify str getDesc mPair =
@@ -568,7 +551,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
-  forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
+  forM_ (M.toList elmOutputsDescs) $ \(filePath, outputDesc) ->
     verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
       verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
       verifyMDesc "output(content)" filePath
@@ -576,8 +559,8 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
          db filePath stat) oldMContentDesc
   liftIO $
     replayExecutionLog bte tdTarget
-    (M.keysSet elInputsDescs) (M.keysSet elOutputsDescs)
-    elStdoutputs elSelfTime
+    (M.keysSet elmInputsDescs) (M.keysSet elmOutputsDescs)
+    (Db.elStdoutputs elmFullLog) (Db.elSelfTime elmFullLog)
   where
     db = bsDb bteBuildsome
     verifyMDesc _   _        _       Nothing        = return ()
@@ -594,12 +577,12 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
-  Db.ExecutionLog -> IO BuiltTargets
-executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.ExecutionLog {..} = do
+  Db.MTimeExecutionLog -> IO BuiltTargets
+executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.MTimeExecutionLog {..} = do
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elInputsDescs)
+  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList $ Db.elInputsDescs elmFullLog)
   waitForSlavesWithParReleased bte entity speculativeSlaves
   where
     mkInputSlavesFor desc inputPath =
@@ -646,24 +629,24 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} entity slaveRequests =
 
 -- TODO: Remember the order of input files' access so can iterate here
 -- in order
-findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
-findApplyExecutionLog bte@BuildTargetEnv{..} entity TargetDesc{..} = do
-  mExecutionLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
-  case mExecutionLog of
-    Nothing -> -- No previous execution log
-      return Nothing
-    Just executionLog -> do
-      eRes <- tryApplyExecutionLog bte entity TargetDesc{..} executionLog
-      case eRes of
-        Left (SpeculativeBuildFailure exception)
-          | isThreadKilled exception -> return Nothing
-        Left err -> do
-          printStrLn btePrinter $ bsRender bteBuildsome $ mconcat $
-            [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
-            , " did not match because ", describeError err
-            ]
-          return Nothing
-        Right res -> return (Just res)
+findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.MTimeExecutionLog, BuiltTargets))
+findApplyExecutionLog bte@BuildTargetEnv{..} entity target@TargetDesc{..} = do
+  mMTimeExecLog <- readIRef $ Db.mtimeExecutionLog tdTarget $ bsDb bteBuildsome
+  case mMTimeExecLog of
+    Nothing ->
+        return Nothing
+    Just mtimeExecutionLog -> do
+        eRes <- tryApplyExecutionLog bte entity TargetDesc{..} mtimeExecutionLog
+        case eRes of
+          Left (SpeculativeBuildFailure exception)
+            | isThreadKilled exception -> return Nothing
+          Left err -> do
+            printStrLn btePrinter $ bsRender bteBuildsome $ mconcat $
+              [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
+              , " did not match because ", describeError err
+              ]
+            return Nothing
+          Right res -> return (Just res)
   where
     Color.Scheme{..} = Color.scheme
     describeError (MismatchedFiles (str, filePath)) =
@@ -934,7 +917,7 @@ runCmd bte@BuildTargetEnv{..} entity target = do
 makeExecutionLog ::
   Buildsome ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO Db.ExecutionLog
+  [FilePath] -> StdOutputs ByteString -> DiffTime -> IO Db.MTimeExecutionLog
 makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
   inputsDescs <- M.traverseWithKey inputAccess inputs
   outputDescPairs <-
@@ -952,13 +935,18 @@ makeExecutionLog buildsome inputs outputs stdOutputs selfTime = do
                  db outPath stat
           return $ Db.FileDescExisting $ Db.OutputDesc (fileStatDescOfStat stat) mContentDesc
       return (outPath, fileDesc)
-  return Db.ExecutionLog
-    { elBuildId = bsBuildId buildsome
-    , elInputsDescs = inputsDescs
-    , elOutputsDescs = M.fromList outputDescPairs
-    , elStdoutputs = stdOutputs
-    , elSelfTime = selfTime
-    }
+  return Db.MTimeExecutionLog
+      { elmInputsDescs = M.map (Db.mapNonExisting $ const ()) inputsDescs
+      , elmOutputsDescs = M.map ((Db.mapNonExisting $ const ())) $ M.fromList outputDescPairs
+      , elmFullLog =
+          Db.ExecutionLog
+          { elBuildId = bsBuildId buildsome
+          , elInputsDescs = inputsDescs
+          , elOutputsDescs = M.fromList outputDescPairs
+          , elStdoutputs = stdOutputs
+          , elSelfTime = selfTime
+          }
+      }
   where
     db = bsDb buildsome
     assertFileMTime path oldMStat =
@@ -1025,7 +1013,7 @@ buildTargetHints bte@BuildTargetEnv{..} entity target =
     Color.Scheme{..} = Color.scheme
 
 buildTargetReal ::
-  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Db.ExecutionLog, BuiltTargets)
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Db.MTimeExecutionLog, BuiltTargets)
 buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
   Print.targetWrap btePrinter bteReason tdTarget "BUILDING" $ do
     deleteOldTargetOutputs bte tdTarget
@@ -1038,7 +1026,7 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
     executionLog <-
       makeExecutionLog bteBuildsome rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
-    writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
+    writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) executionLog
 
     Print.targetTiming btePrinter "now" rcrSelfTime
     return (executionLog, rcrBuiltTargets)
@@ -1056,7 +1044,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
         return $ builtStats hintedBuiltTargets
       ExplicitPathsBuilt -> do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
-        (whenBuilt, (Db.ExecutionLog{..}, builtTargets)) <-
+        (whenBuilt, (Db.MTimeExecutionLog{..}, builtTargets)) <-
           case mSlaveStats of
           Just res -> return (Stats.FromCache, res)
           Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
@@ -1066,11 +1054,11 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
           { Stats.ofTarget =
                M.singleton tdRep Stats.TargetStats
                { tsWhen = whenBuilt
-               , tsTime = elSelfTime
+               , tsTime = Db.elSelfTime elmFullLog
                , tsDirectDeps = deps
                }
           , Stats.stdErr =
-            if mempty /= stdErr elStdoutputs
+            if mempty /= stdErr (Db.elStdoutputs elmFullLog)
             then S.singleton tdRep
             else S.empty
           }

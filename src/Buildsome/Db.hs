@@ -3,10 +3,10 @@
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
-  , InputDesc(..), FileDesc(..)
+  , InputDesc(..), FileDesc(..), mapNonExisting
   , OutputDesc(..)
-  , MTimeExecutionLog(..)
-  , ExecutionLog(..), executionLog
+  , MTimeExecutionLog(..), mtimeExecutionLog
+  , ExecutionLog(..)
   , FileContentDescCache(..), fileContentDescCache
   , Reason
   , IRef(..)
@@ -74,6 +74,10 @@ data FileDesc ne e
   deriving (Generic, Eq, Ord, Show)
 instance (Binary ne, Binary e) => Binary (FileDesc ne e)
 
+mapNonExisting :: (a -> b) -> FileDesc a e -> FileDesc b e
+mapNonExisting f (FileDescNonExisting x) = FileDescNonExisting $ f x
+mapNonExisting _ (FileDescExisting e) = (FileDescExisting e)
+
 data OutputDesc = OutputDesc
   { odStatDesc :: FileStatDesc
   , odContentDesc :: Maybe FileContentDesc -- Nothing if directory
@@ -81,8 +85,9 @@ data OutputDesc = OutputDesc
 instance Binary OutputDesc
 
 data MTimeExecutionLog = MTimeExecutionLog
-  { elmInputMTimes :: [(FilePath, Maybe POSIXTime)]
-  , elmOutputMTimes :: [(FilePath, Maybe POSIXTime)]
+  { elmInputsDescs :: Map FilePath (FileDesc () (POSIXTime, InputDesc))
+  , elmOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
+  , elmFullLog :: ExecutionLog
   } deriving (Generic, Show)
 instance Binary MTimeExecutionLog
 
@@ -153,10 +158,12 @@ mkIRefKey key db = IRef
   , delIRef = deleteKey db key
   }
 
-executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog target = mkIRefKey targetKey
-  where
-    targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
+-- TODO: Canonicalize commands (whitespace/etc)
+targetHash :: Makefile.TargetType output input -> ByteString
+targetHash = MD5.hash . Makefile.targetCmds
+
+mtimeExecutionLog :: Makefile.Target -> Db -> IRef MTimeExecutionLog
+mtimeExecutionLog = mkIRefKey . targetHash
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
