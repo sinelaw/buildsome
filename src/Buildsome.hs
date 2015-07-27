@@ -54,7 +54,7 @@ import qualified Lib.Directory as Dir
 import           Lib.Exception (finally, logErrors, handle, catch, handleSync, putLn)
 import           Lib.FSHook (FSHook, OutputBehavior(..), OutputEffect(..))
 import qualified Lib.FSHook as FSHook
-import           Lib.FileDesc (fileModeDescOfStat, fileStatDescOfStat)
+import           Lib.FileDesc (fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
 import           Lib.Fresh (Fresh)
@@ -79,13 +79,16 @@ import           System.Exit (ExitCode(..))
 import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
 import           System.Process (CmdSpec(..))
+import           System.Directory (copyFile)
 import           Text.Parsec (SourcePos)
+import qualified Data.ByteString.Base16 as Base16
 
 type Parents = [(TargetRep, Target, Reason)]
 
 data Buildsome = Buildsome
   { -- static:
     bsOpts :: Opt
+  , bsBuildsomePath :: FilePath
   , bsMakefile :: Makefile
   , bsPhoniesSet :: Set FilePath
   , bsBuildId :: BuildId
@@ -553,6 +556,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   -- the output content is still correct
   forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
     verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
+      liftIO $ refreshFromContentCache filePath oldMContentDesc
       verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
@@ -574,6 +578,21 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
         Cmp.NotEquals reasons ->
           -- fail entire computation
           left $ (str <> ": " <> BS8.intercalate ", " reasons, filePath)
+
+    refreshFromContentCache filePath oldDesc =
+      case oldDesc of
+        Just (FileContentDescRegular contentHash) ->
+          do
+              let cachedPath = mkTargetWithHashPath bteBuildsome contentHash
+              oldExists <- FilePath.exists cachedPath
+              -- TODO set stat fields
+              if oldExists
+              then
+                do
+                    print $ "Copying: " <> cachedPath <> " -> " <> filePath
+                    copyFile (BS8.unpack cachedPath) (BS8.unpack filePath)
+              else return ()
+        _ -> return ()
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
@@ -914,6 +933,9 @@ runCmd bte@BuildTargetEnv{..} entity target = do
     shellCmd = shellCmdVerify bte target ["HOME", "PATH"]
     Color.Scheme{..} = Color.scheme
 
+mkTargetWithHashPath :: Buildsome -> ByteString -> FilePath
+mkTargetWithHashPath buildsome contentHash = bsBuildsomePath buildsome </> "cached_outputs" </> Base16.encode contentHash-- (outPath <> "." <> Base16.encode contentHash)
+
 makeExecutionLog ::
   Buildsome -> Target ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
@@ -930,9 +952,19 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
           mContentDesc <-
             if Posix.isDirectory stat
             then return Nothing
-            else Just <$>
-                 fileContentDescOfStat "When making execution log (output)"
-                 db outPath stat
+            else do
+              chash <- fileContentDescOfStat "When making execution log (output)"
+                       db outPath stat
+              case chash of
+                FileContentDescRegular contentHash ->
+                  if BS8.null contentHash
+                  then return ()
+                  else do
+                    let targetPath = mkTargetWithHashPath buildsome contentHash
+                    Dir.createDirectories $ FilePath.takeDirectory targetPath
+                    copyFile (BS8.unpack outPath) $ BS8.unpack $ targetPath
+                _ -> return ()
+              return $ Just chash
           return $ Db.FileDescExisting $ Db.OutputDesc (fileStatDescOfStat stat) mContentDesc
       return (outPath, fileDesc)
   return Db.ExecutionLog
@@ -1176,6 +1208,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
       buildsome =
         Buildsome
         { bsOpts = opt
+        , bsBuildsomePath = buildDbFilename makefilePath
         , bsMakefile = makefile
         , bsPhoniesSet = S.fromList . map snd $ makefilePhonies makefile
         , bsBuildId = buildId
