@@ -595,7 +595,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
                 do
                     putStrLn $ BS8.unpack ("Copying: " <> cachedPath <> " -> " <> filePath) ++ " - stat: " ++ show fullStat
                     if newExists
-                    then Posix.removeLink filePath
+                    then removeFileOrDirectoryOrNothing filePath
                     else return ()
                     Dir.createDirectories $ FilePath.takeDirectory filePath
                     Posix.createLink cachedPath filePath
