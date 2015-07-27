@@ -546,40 +546,45 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
         let verify str getDesc mPair restore =
               verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) restore
             restore = refreshFromContentCache filePath (snd <$> mContentAccess) (snd <$> mStatAccess)
-        verify "mode" (return (fileModeDescOfStat stat)) mModeAccess restore
-        verify "stat" (return (fileStatDescOfStat stat)) mStatAccess restore
-        verify "content"
-          (fileContentDescOfStat "When applying execution log (input)"
-           db filePath stat) mContentAccess restore
+        r1 <- verify "mode" (return (fileModeDescOfStat stat)) mModeAccess restore
+        when (not r1) $ do
+          r2 <- verify "stat" (return (fileStatDescOfStat stat)) mStatAccess restore
+          when (not r2) $ do
+            _ <- verify "content"
+                 (fileContentDescOfStat "When applying execution log (input)"
+                  db filePath stat) mContentAccess restore
+            return ()
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
   forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
     verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
       let restore = refreshFromContentCache filePath oldMContentDesc (Just oldStatDesc)
-      verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc restore
-      verifyMDesc "output(content)" filePath
-        (fileContentDescOfStat "When applying execution log (output)"
-         db filePath stat) oldMContentDesc restore
+      restored <- verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc restore
+      when (not restored) $ do
+        _ <- verifyMDesc "output(content)" filePath
+             (fileContentDescOfStat "When applying execution log (output)"
+              db filePath stat) oldMContentDesc restore
+        return ()
   liftIO $
     replayExecutionLog bte tdTarget
     (M.keysSet elInputsDescs) (M.keysSet elOutputsDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
-    verifyMDesc _   _        _       Nothing        _       = return ()
+    verifyMDesc _   _        _       Nothing        _       = return False
     verifyMDesc str filePath getDesc (Just oldDesc) restore =
       verifyDesc str filePath getDesc oldDesc restore
 
     verifyDesc str filePath getDesc oldDesc restore = do
       newDesc <- liftIO getDesc
       case Cmp.cmp oldDesc newDesc of
-        Cmp.Equals -> return ()
+        Cmp.Equals -> return False
         Cmp.NotEquals reasons -> do
           -- fail entire computation
           wasRestored <- liftIO restore
           if wasRestored
-          then return ()
+          then return True
           else left $ (str <> ": " <> BS8.intercalate ", " reasons, filePath)
 
     refreshFromContentCache filePath oldDesc oldStatDesc =
@@ -971,6 +976,8 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
                   then return ()
                   else do
                     let targetPath = mkTargetWithHashPath buildsome contentHash
+                    -- putStrLn $ BS8.unpack ("Copying: " <> outPath <> " -> " <> targetPath)
+                    removeFileOrDirectoryOrNothing targetPath
                     Dir.createDirectories $ FilePath.takeDirectory targetPath
                     Posix.createLink outPath targetPath
                 _ -> return ()
