@@ -127,7 +127,7 @@ toMTimeExecutionLog :: ExecutionLog -> MTimeExecutionLog
 toMTimeExecutionLog ExecutionLog{..} =
   MTimeExecutionLog
   { elmInputsDescs = M.map (fdescMapExisting f . (fdescMapNonExisting $ const ())) elInputsDescs
-  , elmOutputsDescs = M.map ((fdescMapNonExisting $ const ())) $ elOutputsDescs
+  , elmOutputsDescs = M.map (fdescMapNonExisting $ const ()) $ elOutputsDescs
   , elmSelfTime = elSelfTime
   }
   where f (ptime, idesc) = (ptime, idDropReasons idesc)

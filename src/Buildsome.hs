@@ -586,11 +586,11 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.MTimeExe
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
-  fullLog <- case mFullLog of
-      Nothing -> error "Ouch!"
-      Just l -> return l
-  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList $ Db.elInputsDescs fullLog)
+  -- mFullLog <- readIRef $ Db.executionLog tdTarget $ bsDb bteBuildsome
+  -- fullLog <- case mFullLog of
+  --     Nothing -> error "Ouch!"
+  --     Just l -> return l
+  speculativeSlaves <- concat <$> mapM mkInputSlaves (M.toList elmInputsDescs)
   waitForSlavesWithParReleased bte entity speculativeSlaves
   where
     mkInputSlavesFor desc inputPath =
@@ -599,7 +599,7 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.MTimeExe
         Just (depReason, accessType) ->
           slavesFor bteImplicit
           { bteReason =
-            "Remembered from previous build (speculative): " <> depReason
+            "Remembered from previous build (speculative): " -- <> depReason
           } $ slaveReqForAccessType accessType inputPath
     mkInputSlaves (inputPath, desc)
       | inputPath `S.member` hinted = return []
@@ -628,8 +628,7 @@ parentDirs = map FilePath.takeDirectory . filter (`notElem` ["", "/"])
 buildManyWithParReleased ::
   (ColorText -> Reason) -> BuildTargetEnv -> Parallelism.Entity -> [SlaveRequest] -> IO BuiltTargets
 buildManyWithParReleased mkReason bte@BuildTargetEnv{..} entity slaveRequests =
-  do
-    waitForSlavesWithParReleased bte entity =<< fmap concat (mapM mkSlave slaveRequests)
+  waitForSlavesWithParReleased bte entity =<< fmap concat (mapM mkSlave slaveRequests)
   where
     mkSlave req =
       slavesFor bte { bteReason = mkReason (cTarget (show (inputFilePath req))) } req
@@ -638,7 +637,7 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} entity slaveRequests =
 -- TODO: Remember the order of input files' access so can iterate here
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.MTimeExecutionLog, BuiltTargets))
-findApplyExecutionLog bte@BuildTargetEnv{..} entity target@TargetDesc{..} = do
+findApplyExecutionLog bte@BuildTargetEnv{..} entity TargetDesc{..} = do
   mMTimeExecLog <- readIRef $ Db.mtimeExecutionLog tdTarget $ bsDb bteBuildsome
   case mMTimeExecLog of
     Nothing ->
@@ -649,7 +648,7 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity target@TargetDesc{..} = do
           Left (SpeculativeBuildFailure exception)
             | isThreadKilled exception -> return Nothing
           Left err -> do
-            printStrLn btePrinter $ bsRender bteBuildsome $ mconcat $
+            printStrLn btePrinter $ bsRender bteBuildsome $ mconcat
               [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
               , " did not match because ", describeError err
               ]
