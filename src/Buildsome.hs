@@ -1029,7 +1029,7 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
     executionLog <-
       makeExecutionLog bteBuildsome rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
-    writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
+    --writeIRef (Db.executionLog tdTarget (bsDb bteBuildsome)) executionLog
 
     writeIRef (Db.mtimeExecutionLog tdTarget (bsDb bteBuildsome)) $ Db.toMTimeExecutionLog executionLog
 
@@ -1167,6 +1167,7 @@ with ::
 with printer db makefilePath makefile opt@Opt{..} body = do
   ldPreloadPath <- FSHook.getLdPreloadPath optFsOverrideLdPreloadPath
   Print.buildsomeCreation printer optWiths optWithouts optVerbosity
+  Db.load db
   FSHook.with printer ldPreloadPath $ \fsHook -> do
     slaveMapByTargetRep <- SyncMap.new
     -- Many, many slaves are invoked, but only up to optParallelism
@@ -1216,6 +1217,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
         -- Must update gitIgnore after all the slaves finished updating
         -- the registered output lists:
         `finally` maybeUpdateGitIgnore buildsome
+        `finally` Db.save db
         `catch` \e -> E.throwIO . fromMaybe e =<< readIORef errorRef
   where
     maybeUpdateGitIgnore buildsome =

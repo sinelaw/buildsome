@@ -2,12 +2,12 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveGeneric, OverloadedStrings, TupleSections #-}
 module Buildsome.Db
-  ( Db, with
+  ( Db, with, timeItP, save, load
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..)
   , OutputDesc(..)
   , MTimeExecutionLog(..), mtimeExecutionLog
-  , ExecutionLog(..), executionLog
+  , ExecutionLog(..)
   , toMTimeExecutionLog
   , FileContentDescCache(..), fileContentDescCache
   , Reason
@@ -17,6 +17,7 @@ module Buildsome.Db
 
 import Prelude.Compat hiding (FilePath)
 
+import System.TimeIt (timeItT)
 import Buildsome.BuildId (BuildId)
 
 import Data.Binary (Binary(..))
@@ -54,7 +55,8 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
-  , dbCachedLogs :: IORef (Map ByteString MTimeExecutionLog)
+  , dbCachedLogs :: IORef (Bool, Map ByteString MTimeExecutionLog)
+  , dbFileContentDescCache :: IORef (Bool, Map FilePath FileContentDescCache)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -138,11 +140,18 @@ registeredOutputsRef = dbRegisteredOutputs
 leakedOutputsRef :: Db -> IORef (Set FilePath)
 leakedOutputsRef = dbLeakedOutputs
 
+timeItP :: [Char] -> IO b -> IO b
+--timeItP _ = id
+timeItP name act = do
+    (t, v) <- timeItT $ (\x -> (x `seq` x)) <$> act
+    putStrLn $ name ++ ": " ++ show (t * 1000000)
+    return v
+
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
-setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
+setKey db key val = timeItP "setKey" $ LevelDB.put (dbLevel db) def key $ encode val
 
 getKey :: (Show a, Binary a) => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey db key = timeItP ("getKey: " ++ BS8.unpack key) $ fmap decode <$> LevelDB.get (dbLevel db) def key
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def
@@ -162,11 +171,12 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
-  cache <- newIORef M.empty
+  cache <- newIORef (False, M.empty)
+  fdCache <- newIORef (False, M.empty)
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs cache)
+    body (Db levelDb registeredOutputs leakedOutputs cache fdCache)
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -195,32 +205,58 @@ mkIRefKey key db = IRef
 targetHash :: Makefile.TargetType output input -> ByteString
 targetHash = MD5.hash . Makefile.targetCmds
 
-mtimeExecutionLog :: Makefile.Target -> Db -> IRef MTimeExecutionLog
-mtimeExecutionLog t db = ir
+mkMemIRef :: Ord k => k -> IORef (Bool, Map k a) -> IRef a
+mkMemIRef th ioRef = IRef
   {
-    readIRef = do
-      cache <- readIORef $ dbCachedLogs db
-      case M.lookup th cache of
-        Nothing -> readIRef ir
-        Just x -> return $ Just x
+    readIRef = (M.lookup th . snd) <$> readIORef ioRef
   , writeIRef = \v -> do
-      _ <- atomicModifyIORef' (dbCachedLogs db)
-           (\cache -> (M.insert th v cache, ()))
-      writeIRef ir $ v
+      atomicModifyIORef' ioRef
+          (\(_, cache) -> ((True, M.insert th v cache), ()))
   , delIRef = do
-      _ <- atomicModifyIORef' (dbCachedLogs db)
-           (\cache -> (M.delete th cache, ()))
-      delIRef ir
+      atomicModifyIORef' ioRef
+          (\(_, cache) -> ((True, M.delete th cache), ()))
   }
-  where
-    th = targetHash t
-    ir = mkIRefKey (encode . (LogTypeMTime, ) $ targetHash t) db
 
-executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog = mkIRefKey . encode . (LogTypeFull, ) . targetHash
+mtimeExecutionLog :: Makefile.Target -> Db -> IRef MTimeExecutionLog
+mtimeExecutionLog t db = mkMemIRef (targetHash t) (dbCachedLogs db)
+
+load' :: (Binary k, Binary a) => String -> IORef (Bool, (Map k a)) -> IO ()
+load' name ioRef = do
+    putStrLn "Loading db..."
+    cacheBS <- BS8.readFile name
+    let cache = if BS8.null cacheBS
+                 then M.empty
+                 else decode cacheBS
+    putStrLn "Done loading db."
+    atomicWriteIORef ioRef (False, cache)
+
+save' :: Binary a => String -> IORef (Bool, a) -> IO ()
+save' name ioRef = do
+    putStrLn "Saving db..."
+    (changed, val) <- readIORef ioRef
+    if changed
+    then BS8.writeFile name $ encode val
+    else return ()
+    putStrLn "Done saving db."
+
+load :: Db -> IO ()
+load db = do
+    load' "Buildsome.mk.db/fdLog" (dbFileContentDescCache db)
+    load' "Buildsome.mk.db/mtimeLog" (dbCachedLogs db)
+
+save :: Db -> IO ()
+save db = do
+    save' "Buildsome.mk.db/fdLog" (dbFileContentDescCache db)
+    save' "Buildsome.mk.db/mtimeLog" (dbCachedLogs db)
+
+-- executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
+-- executionLog = mkIRefKey . encode . (LogTypeFull, ) . targetHash
+
+-- fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
+-- fileContentDescCache = mkIRefKey
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
-fileContentDescCache = mkIRefKey
+fileContentDescCache k db = mkMemIRef k (dbFileContentDescCache db)
 
 type MFileContentDesc = FileDesc () FileContentDesc
 
