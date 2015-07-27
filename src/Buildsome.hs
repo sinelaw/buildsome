@@ -54,7 +54,7 @@ import qualified Lib.Directory as Dir
 import           Lib.Exception (finally, logErrors, handle, catch, handleSync, putLn)
 import           Lib.FSHook (FSHook, OutputBehavior(..), OutputEffect(..))
 import qualified Lib.FSHook as FSHook
-import           Lib.FileDesc (fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
+import           Lib.FileDesc (fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..), FullStatEssence(..), FileStatDesc(..))
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
 import           Lib.Fresh (Fresh)
@@ -79,7 +79,6 @@ import           System.Exit (ExitCode(..))
 import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
 import           System.Process (CmdSpec(..))
-import           System.Directory (copyFile)
 import           Text.Parsec (SourcePos)
 import qualified Data.ByteString.Base16 as Base16
 
@@ -544,55 +543,66 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
     verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
-        let verify str getDesc mPair =
-              verifyMDesc ("input(" <> str <> ")") filePath getDesc $ snd <$> mPair
-        verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
-        verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
+        let verify str getDesc mPair restore =
+              verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) restore
+            restore = refreshFromContentCache filePath (snd <$> mContentAccess) (snd <$> mStatAccess)
+        verify "mode" (return (fileModeDescOfStat stat)) mModeAccess restore
+        verify "stat" (return (fileStatDescOfStat stat)) mStatAccess restore
         verify "content"
           (fileContentDescOfStat "When applying execution log (input)"
-           db filePath stat) mContentAccess
+           db filePath stat) mContentAccess restore
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
   forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
     verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
-      liftIO $ refreshFromContentCache filePath oldMContentDesc
-      verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
+      let restore = refreshFromContentCache filePath oldMContentDesc (Just oldStatDesc)
+      verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc restore
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
-         db filePath stat) oldMContentDesc
+         db filePath stat) oldMContentDesc restore
   liftIO $
     replayExecutionLog bte tdTarget
     (M.keysSet elInputsDescs) (M.keysSet elOutputsDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
-    verifyMDesc _   _        _       Nothing        = return ()
-    verifyMDesc str filePath getDesc (Just oldDesc) =
-      verifyDesc str filePath getDesc oldDesc
+    verifyMDesc _   _        _       Nothing        _       = return ()
+    verifyMDesc str filePath getDesc (Just oldDesc) restore =
+      verifyDesc str filePath getDesc oldDesc restore
 
-    verifyDesc str filePath getDesc oldDesc = do
+    verifyDesc str filePath getDesc oldDesc restore = do
       newDesc <- liftIO getDesc
       case Cmp.cmp oldDesc newDesc of
         Cmp.Equals -> return ()
-        Cmp.NotEquals reasons ->
+        Cmp.NotEquals reasons -> do
           -- fail entire computation
-          left $ (str <> ": " <> BS8.intercalate ", " reasons, filePath)
+          wasRestored <- liftIO restore
+          if wasRestored
+          then return ()
+          else left $ (str <> ": " <> BS8.intercalate ", " reasons, filePath)
 
-    refreshFromContentCache filePath oldDesc =
-      case oldDesc of
-        Just (FileContentDescRegular contentHash) ->
+    refreshFromContentCache filePath oldDesc oldStatDesc =
+      case (oldDesc, oldStatDesc) of
+        (Just (FileContentDescRegular contentHash), Just (FileStatOther fullStat)) ->
           do
               let cachedPath = mkTargetWithHashPath bteBuildsome contentHash
               oldExists <- FilePath.exists cachedPath
+              newExists <- FilePath.exists filePath
               -- TODO set stat fields
               if oldExists
               then
                 do
-                    print $ "Copying: " <> cachedPath <> " -> " <> filePath
-                    copyFile (BS8.unpack cachedPath) (BS8.unpack filePath)
-              else return ()
-        _ -> return ()
+                    putStrLn $ BS8.unpack ("Copying: " <> cachedPath <> " -> " <> filePath) ++ " - stat: " ++ show fullStat
+                    if newExists
+                    then Posix.removeLink filePath
+                    else return ()
+                    Dir.createDirectories $ FilePath.takeDirectory filePath
+                    Posix.createLink cachedPath filePath
+                    Posix.setFileTimesHiRes filePath (statusChangeTimeHiRes fullStat) (modificationTimeHiRes fullStat)
+                    return True
+              else return False
+        _ -> return False
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
@@ -962,7 +972,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
                   else do
                     let targetPath = mkTargetWithHashPath buildsome contentHash
                     Dir.createDirectories $ FilePath.takeDirectory targetPath
-                    copyFile (BS8.unpack outPath) $ BS8.unpack $ targetPath
+                    Posix.createLink outPath targetPath
                 _ -> return ()
               return $ Just chash
           return $ Db.FileDescExisting $ Db.OutputDesc (fileStatDescOfStat stat) mContentDesc

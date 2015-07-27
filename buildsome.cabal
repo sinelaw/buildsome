@@ -128,7 +128,7 @@ executable buildsome
                ,     template-haskell >= 2.8 && < 2.11
                ,     time >=1.4 && <1.6
                ,     transformers >=0.3 && <=0.5
-               ,     unix >=2.6 && <2.8
+               ,     unix >=2.7 && <2.8
 
   if flag(Charts)
     cpp-options:       -DWITH_CHARTS_SUPPORT
