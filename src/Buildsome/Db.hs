@@ -54,6 +54,7 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
+  , dbCachedLogs :: IORef (Map ByteString MTimeExecutionLog)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -161,10 +162,11 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
+  cache <- newIORef M.empty
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs)
+    body (Db levelDb registeredOutputs leakedOutputs cache)
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -194,7 +196,25 @@ targetHash :: Makefile.TargetType output input -> ByteString
 targetHash = MD5.hash . Makefile.targetCmds
 
 mtimeExecutionLog :: Makefile.Target -> Db -> IRef MTimeExecutionLog
-mtimeExecutionLog = mkIRefKey . encode . (LogTypeMTime, ) . targetHash
+mtimeExecutionLog t db = ir
+  {
+    readIRef = do
+      cache <- readIORef $ dbCachedLogs db
+      case M.lookup th cache of
+        Nothing -> readIRef ir
+        Just x -> return $ Just x
+  , writeIRef = \v -> do
+      _ <- atomicModifyIORef' (dbCachedLogs db)
+           (\cache -> (M.insert th v cache, ()))
+      writeIRef ir $ v
+  , delIRef = do
+      _ <- atomicModifyIORef' (dbCachedLogs db)
+           (\cache -> (M.delete th cache, ()))
+      delIRef ir
+  }
+  where
+    th = targetHash t
+    ir = mkIRefKey (encode . (LogTypeMTime, ) $ targetHash t) db
 
 executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
 executionLog = mkIRefKey . encode . (LogTypeFull, ) . targetHash
