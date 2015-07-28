@@ -43,7 +43,7 @@ withAttr sgrs (ColorText pairs) = ColorText $ (map . onFirst) (sgrs++) pairs
 groupOn :: Eq b => (a -> b) -> [a] -> [[a]]
 groupOn f = List.groupBy ((==) `on` f)
 
-mkColorText = ColorText . map (onSecond Interned.intern)
+mkColorText = ColorText . map (onSecond (\x -> (BS8.length x `seq` Interned.intern x)))
 
 normalize :: ColorText -> ColorText
 normalize = mkColorText . map concatGroup . groupOn fst . filter (not . BS8.null . snd) . colorTextPairs

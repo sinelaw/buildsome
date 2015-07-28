@@ -104,8 +104,7 @@ setKey :: Binary a => Db -> ByteString -> a -> IO ()
 setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
 
 getKey :: (Show a, Binary a) => Db -> ByteString -> IO (Maybe a)
-getKey db key = (force . fmap decode) <$> LevelDB.get (dbLevel db) def key
-    where force x = length (show x) `seq` x
+getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def

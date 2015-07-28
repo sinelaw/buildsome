@@ -184,6 +184,8 @@ with printer ldPreloadPath body = do
             `finally` Sock.close conn
       body fsHook
 
+doneBy = " done by1 "
+
 {-# INLINE sendGo #-}
 sendGo :: Socket -> IO ()
 sendGo conn = void $ SockBS.send conn (BS8.pack "GO")
@@ -241,7 +243,7 @@ handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
     handleDelayed   inputs outputs = wrap $ delayedFSAccessHandler handlers actDesc inputs outputs
     handleUndelayed inputs outputs = wrap $ undelayedFSAccessHandler handlers actDesc inputs outputs
     wrap = wrapHandler job conn isDelayed
-    actDesc = fromString (Protocol.showFunc func) <> " done by " <> jobLabel job
+    actDesc = fromString (Protocol.showFunc func) <> doneBy <> jobLabel job
     handleInput accessType path = handleInputs [Input accessType path]
     handleInputs inputs =
       case isDelayed of
@@ -364,12 +366,12 @@ runCommand fsHook rootFilter cmd label fsAccessHandlers = do
     do
       res <-
         withRunningJob fsHook jobId job $ cmd $ mkEnvVars fsHook rootFilter jobId
-      let timeoutMsg =
-            Printer.render (fsHookPrinter fsHook)
-            (label <> ": Process completed, but still has likely-leaked " <>
-             "children connected to FS hooks")
-      Timeout.warning (Timeout.seconds 5) timeoutMsg $
-        onActiveConnections awaitConnection
+      -- let timeoutMsg =
+      --       Printer.render (fsHookPrinter fsHook)
+      --       (label <> ": Process completed, but still has likely-leaked " <>
+      --        "children connected to FS hooks")
+      -- Timeout.warning (Timeout.seconds 5) timeoutMsg $
+      --   onActiveConnections awaitConnection
       return res
   where
     killConnection (tid, awaitConn) = killThread tid >> awaitConn

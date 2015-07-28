@@ -620,7 +620,8 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
                         [ "Execution log of ", path
                         , " did not match because ", err
                         ]
-                  return (msg, path)
+                  liftIO $ printStrLn btePrinter $ msg
+                  return ()
               Right x -> left x
 
       case mMatchingBuildDesc of
@@ -630,7 +631,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
               (M.keysSet bdInputsDescs) (M.keysSet bdOutputsDescs)
               elStdoutputs elSelfTime
           --Left x -> left ("Couldn't match any: ", "<TODO>")
-          Right errors -> left (BS8.intercalate "\n" $ map fst errors, BS8.intercalate "\n" $ map snd errors)
+          Right errors -> left ("Couldn't match any match", "<TODO>") -- left (BS8.intercalate "\n" $ map fst errors, BS8.intercalate "\n" $ map snd errors)
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
@@ -755,7 +756,7 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
     -- We're masked by SyncMap now:
     panicOnError $
     E.uninterruptibleMask $ \restoreUninterruptible ->
-    withTimeout $
+--    withTimeout $
     do
       -- SyncMap runs this uninterruptible, so should not block
       -- indefinitely.
