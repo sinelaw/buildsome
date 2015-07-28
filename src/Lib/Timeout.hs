@@ -30,23 +30,23 @@ seconds :: Integer -> DiffTime
 seconds = secondsToDiffTime
 
 execute :: DiffTime -> IO () -> IO a -> IO a
-execute timeout timeoutAction body =
+execute timeout timeoutAction body = body
     -- Protect withAsyncWithUnmask with uninterruptibleMask
-    uninterruptibleMask $ \restore ->
-    withAsyncWithUnmask timeoutActionWrap $ \_async -> restore body
-    where
-        timeoutActionWrap :: (forall a. IO a -> IO a) -> IO ()
-        timeoutActionWrap unmask =
-            unmask $ do
-                threadDelay $ floor $ 1000000.0 * timeout
-                timeoutAction
+    -- uninterruptibleMask $ \restore ->
+    -- withAsyncWithUnmask timeoutActionWrap $ \_async -> restore body
+    -- where
+    --     timeoutActionWrap :: (forall a. IO a -> IO a) -> IO ()
+    --     timeoutActionWrap unmask =
+    --         unmask $ do
+    --             threadDelay $ floor $ 1000000.0 * timeout
+    --             timeoutAction
 
 warning :: DiffTime -> ByteString -> IO a -> IO a
-warning timeout errMsg =
-    execute timeout timeoutLoop
-    where
-        timeoutLoop =
-            forever $
-            do
-                BS8.hPutStrLn stderr $ "TIMEOUT: " <> errMsg
-                threadDelay $ floor $ 1000000.0 * timeout
+warning timeout errMsg = id
+    -- execute timeout timeoutLoop
+    -- where
+    --     timeoutLoop =
+    --         forever $
+    --         do
+    --             BS8.hPutStrLn stderr $ "TIMEOUT: " <> errMsg
+    --             threadDelay $ floor $ 1000000.0 * timeout

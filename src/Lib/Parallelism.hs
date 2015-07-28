@@ -58,7 +58,7 @@ data EntityState
     | EntityStateFinished
 
 data Entity = Entity
-    { entityState :: !(IORef EntityState)
+    { entityState :: Int -- !(IORef EntityState)
     , entityId :: String
     }
 instance Eq Entity where
@@ -79,12 +79,12 @@ rootEntity pool =
             , entityRunningReleaseCounter = 0
             }
         return $ Entity
-            { entityState = state
+            { entityState = 0 --state
             , entityId = "Root"
             }
 
 modifyEntityState :: Entity -> (EntityState -> (EntityState, IO a)) -> IO a
-modifyEntityState entity = join . atomicModifyIORef (entityState entity)
+modifyEntityState entity f = undefined --  --join . atomicModifyIORef (entityState entity)
 
 modifyEntityRunningState ::
     Entity ->
@@ -279,33 +279,34 @@ maybeReallocFromChildren _printer parent =
 -- step, so it's not a big deal.
 
 withReleased :: Printer -> Pool -> Entity -> [Entity] -> IO r -> IO r
-withReleased printer pool parent dupChildren =
-    bracket_
-    (maybeReleaseToChildren printer pool parent children)
-    (maybeReallocFromChildren printer parent)
-    where
-        children = List.nub dupChildren
+withReleased printer pool parent dupChildren = id
+
+    -- bracket_
+    -- (maybeReleaseToChildren printer pool parent children)
+    -- (maybeReallocFromChildren printer parent)
+    -- where
+    --     children = List.nub dupChildren
 
 -- | Must use the resulting wrapper on the child (which implies
 -- masking this call)!
 fork :: String -> Printer -> Pool -> IO (Entity, Printer -> IO a -> IO a)
 fork ident _printer pool =
     do
-        alloc <- PoolAlloc.startAlloc 0 pool
-        stateRef <-
-            newIORef $ EntityStateRunning $
-            EntityRunning
-            { entityRunningParents = []
-            , entityRunningPriority = Priority False 0
-            , entityRunningReleaseCounter = 0
-            , entityRunningState = EntityForking alloc
-            }
+        -- alloc <- PoolAlloc.startAlloc 0 pool
+        -- stateRef <-
+        --     newIORef $ EntityStateRunning $
+        --     EntityRunning
+        --     { entityRunningParents = []
+        --     , entityRunningPriority = Priority False 0
+        --     , entityRunningReleaseCounter = 0
+        --     , entityRunningState = EntityForking alloc
+        --     }
         let entity =
                 Entity
-                { entityState = stateRef
+                { entityState = 0 --stateRef
                 , entityId = ident
                 }
-        return (entity, wrapChild pool entity alloc)
+        return (entity, \p a -> a) --wrapChild pool entity alloc)
 
 -- Called only if the fork allocation has failed!
 -- Runs under uninterruptibleMask
@@ -379,7 +380,7 @@ boostPriority printer upgrade entity =
             newPriority = upgrade oldPriority
 
 upgradePriority :: Printer -> Entity -> IO ()
-upgradePriority printer entity =
-    E.mask_ $ boostPriority printer upgrade entity
-    where
-        upgrade p = p { priorityIsUpgraded = True }
+upgradePriority printer entity = return ()
+    -- E.mask_ $ boostPriority printer upgrade entity
+    -- where
+    --     upgrade p = p { priorityIsUpgraded = True }
