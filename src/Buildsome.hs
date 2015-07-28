@@ -182,7 +182,6 @@ updateGitIgnore buildsome makefilePath = do
 data BuildTargetEnv = BuildTargetEnv
   { bteBuildsome :: Buildsome
   , btePrinter :: Printer
-  , bteReason :: Reason
   , bteParents :: Parents
   , bteExplicitlyDemanded :: Bool
   , bteSpeculative :: Bool
@@ -232,7 +231,6 @@ want printer buildsome reason paths = do
         BuildTargetEnv
         { bteBuildsome = buildsome
         , btePrinter = printer
-        , bteReason = reason
         , bteParents = []
         , bteExplicitlyDemanded = True
         , bteSpeculative = False
@@ -291,7 +289,7 @@ slavesForChildrenOf :: BuildTargetEnv -> FilePath -> IO [(Parallelism.Entity, Sl
 slavesForChildrenOf bte@BuildTargetEnv{..} path
   | FilePath.isAbsolute path = return [] -- Only project-relative paths may have output rules
   | not (null childPatterns) =
-    fail $ "UNSUPPORTED: Read directory on directory with patterns: " ++ show path ++ " (" ++ BS8.unpack (bsRender bteBuildsome bteReason) ++ ")"
+    fail $ "UNSUPPORTED: Read directory on directory with patterns: " ++ show path ++ " (" ++ BS8.unpack (bsRender bteBuildsome "") ++ ")"
   | otherwise =
     -- Non-pattern targets here, so they're explicitly demanded
     traverse (getSlaveForTarget bte { bteExplicitlyDemanded = True }) $
@@ -313,7 +311,7 @@ slavesFor bte (SlaveRequestDirect path) =
     maybeToList <$> slaveForDirectPath bte path
 slavesFor bte@BuildTargetEnv{..} (SlaveRequestFull path) = do
   mSlave <- slaveForDirectPath bte path
-  children <- slavesForChildrenOf bte { bteReason = bteReason <> " (Container directory)" } path
+  children <- slavesForChildrenOf bte path
   return $ maybeToList mSlave ++ children
 
 slaveReqForAccessType :: FSHook.AccessType -> FilePath -> SlaveRequest
@@ -438,7 +436,7 @@ replayExecutionLog ::
   Set FilePath -> Set FilePath ->
   StdOutputs ByteString -> DiffTime -> IO ()
 replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfTime =
-  Print.replay btePrinter target stdOutputs bteReason
+  Print.replay btePrinter target stdOutputs ""
   (optVerbosity (bsOpts bteBuildsome)) selfTime $
   -- We only register legal outputs that were CREATED properly in the
   -- execution log, so all outputs keep no old content
@@ -649,9 +647,7 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.Executio
         Nothing -> return []
         Just (depReason, accessType) ->
           slavesFor bteImplicit
-          { bteReason =
-            "Remembered from previous build (speculative): " <> depReason
-          } $ slaveReqForAccessType accessType inputPath
+          $ slaveReqForAccessType accessType inputPath
     mkInputSlaves (inputPath, desc)
       | inputPath `S.member` hinted = return []
       | otherwise = mkInputSlavesFor desc inputPath
@@ -683,7 +679,7 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} entity slaveRequests =
     waitForSlavesWithParReleased bte entity =<< fmap concat (mapM mkSlave slaveRequests)
   where
     mkSlave req =
-      slavesFor bte { bteReason = mkReason (cTarget (show (inputFilePath req))) } req
+      slavesFor bte req
     Color.Scheme{..} = Color.scheme
 
 -- TODO: Remember the order of input files' access so can iterate here
@@ -777,7 +773,7 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
       return (fork, slave)
     where
       Color.Scheme{..} = Color.scheme
-      newParents = (tdRep, tdTarget, bteReason) : bteParents
+      newParents = (tdRep, tdTarget, "") : bteParents
       panicHandler e@E.SomeException {} =
         panic (bsRender bteBuildsome) $ "FAILED during making of slave: " ++ show e
       panicOnError = handle panicHandler
@@ -1080,7 +1076,7 @@ buildTargetHints bte@BuildTargetEnv{..} entity target =
       ExplicitPathsBuilt -> do
         (explicitPathsBuilt, inputsBuilt) <-
           buildExplicitWithParReleased
-            bte { bteReason = "Hint from " <> cTarget (show (targetOutputs target)) }
+            bte
             entity $ map SlaveRequestDirect $ targetAllInputs target
         return (explicitPathsBuilt, targetParentsBuilt <> inputsBuilt)
   where
@@ -1090,7 +1086,7 @@ buildTargetReal ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe Db.ExecutionLog
   -> IO (Db.ExecutionLog, BuiltTargets)
 buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} mOldLog =
-  Print.targetWrap btePrinter bteReason tdTarget "BUILDING" $ do
+  Print.targetWrap btePrinter "" tdTarget "BUILDING" $ do
     deleteOldTargetOutputs bte tdTarget
 
     Print.executionCmd verbosityCommands btePrinter tdTarget
