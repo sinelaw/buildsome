@@ -30,7 +30,7 @@ import           Buildsome.Stats (Stats(Stats))
 import qualified Buildsome.Stats as Stats
 import           Control.Concurrent (forkIO, threadDelay)
 import qualified Control.Exception as E
-import           Control.Monad (void, unless, when, filterM, forM, forM_, (<=<))
+import           Control.Monad (void, unless, when, filterM, forM, forM_)
 import           Control.Monad.IO.Class (MonadIO(..))
 import           Control.Monad.Trans.Either (EitherT(..), left, bimapEitherT)
 import           Data.ByteString (ByteString)
@@ -535,38 +535,35 @@ tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog = do
       executionLogVerifyFilesState bte targetDesc executionLog
     return (executionLog, builtTargets)
 
-executionLogVerifyFilesState ::
-  MonadIO m =>
-  BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
-  EitherT (ByteString, FilePath) m ()
-executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} =
-  forM_ elBuildDescs $ \(Db.BuildDesc{..}) -> runEitherT $ do
-    forM_ (M.toList bdInputsDescs) $ \(filePath, desc) ->
-      verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
-        when (Posix.modificationTimeHiRes stat /= mtime) $ do
-          let verify str getDesc mPair =
-                do _ <- verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) (return False)
-                   return ()
-          verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
-          verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
-          verify "content" (fileContentDescOfStat "When applying execution log (input)"
-                            db filePath stat) mContentAccess
-    -- For now, we don't store the output files' content
-    -- anywhere besides the actual output files, so just verify
-    -- the output content is still correct
-    forM_ (M.toList bdOutputsDescs) $ \(filePath, outputDesc) ->
-      verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
-        let restore = refreshFromContentCache filePath oldMContentDesc (Just oldStatDesc)
-        restored <- verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc restore
-        when (not restored) $ do
-          _ <- verifyMDesc "output(content)" filePath
-               (fileContentDescOfStat "When applying execution log (output)"
-                db filePath stat) oldMContentDesc restore
-          return ()
-    liftIO $
-      replayExecutionLog bte tdTarget
-      (M.keysSet bdInputsDescs) (M.keysSet bdOutputsDescs)
-      elStdoutputs elSelfTime
+
+executionLogVerifyFilesStateSingle
+  :: MonadIO m =>
+     BuildTargetEnv
+     -> Db.BuildDesc -> EitherT (ByteString, FilePath) m Db.BuildDesc
+executionLogVerifyFilesStateSingle BuildTargetEnv{..} buildDesc@Db.BuildDesc{..} =
+  do
+      forM_ (M.toList bdInputsDescs) $ \(filePath, desc) ->
+        verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
+          when (Posix.modificationTimeHiRes stat /= mtime) $ do
+            let verify str getDesc mPair =
+                  do _ <- verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) (return False)
+                     return ()
+            verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
+            verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
+            verify "content" (fileContentDescOfStat "When applying execution log (input)"
+                              db filePath stat) mContentAccess
+
+      forM_ (M.toList bdOutputsDescs) $ \(filePath, outputDesc) ->
+        verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
+          let restore = refreshFromContentCache filePath oldMContentDesc (Just oldStatDesc)
+          restored <- verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc restore
+          when (not restored) $ do
+            _ <- verifyMDesc "output(content)" filePath
+                 (fileContentDescOfStat "When applying execution log (output)"
+                  db filePath stat) oldMContentDesc restore
+            return ()
+      -- All ok!
+      return buildDesc
   where
     db = bsDb bteBuildsome
     verifyMDesc _   _        _       Nothing        _       = return False
@@ -595,7 +592,9 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
               if oldExists
               then
                 do
-                    putStrLn $ BS8.unpack ("Copying: " <> cachedPath <> " -> " <> filePath) ++ " - stat: " ++ show fullStat
+                    printStrLn btePrinter $ bsRender bteBuildsome $ ColorText.simple
+                      $ mconcat [ "Copying: " <> cachedPath <> " -> " <> filePath
+                                , " - stat: " <> show fullStat ]
                     if newExists
                     then removeFileOrDirectoryOrNothing filePath
                     else return ()
@@ -605,6 +604,32 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
                     return True
               else return False
         _ -> return False
+
+executionLogVerifyFilesState ::
+  MonadIO m =>
+  BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
+  EitherT (ByteString, FilePath) m ()
+executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} =
+  do
+      mMatchingBuildDesc <- runEitherT $ forM elBuildDescs $ \buildDesc ->
+        do  res <- runEitherT $executionLogVerifyFilesStateSingle bte buildDesc
+            case res of
+              Left (err, path) -> do
+                  liftIO $ printStrLn btePrinter $ bsRender bteBuildsome $ ColorText.simple $ mconcat $
+                    [ "Execution log of ", path
+                    , " did not match because ", err
+                    ]
+                  return ()
+              Right x -> left x
+
+      case mMatchingBuildDesc of
+          Left Db.BuildDesc{..} ->
+            liftIO $
+              replayExecutionLog bte tdTarget
+              (M.keysSet bdInputsDescs) (M.keysSet bdOutputsDescs)
+              elStdoutputs elSelfTime
+          --Left x -> left ("Couldn't match any: ", "<TODO>")
+          _ -> left ("Couldn't match any: ", "<TODO>")
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
