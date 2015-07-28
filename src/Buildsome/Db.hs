@@ -4,7 +4,7 @@ module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..)
-  , OutputDesc(..)
+  , OutputDesc(..), BuildDesc(..)
   , ExecutionLog(..), executionLog
   , FileContentDescCache(..), fileContentDescCache
   , Reason
@@ -79,11 +79,16 @@ data OutputDesc = OutputDesc
   } deriving (Generic, Show)
 instance Binary OutputDesc
 
+data BuildDesc = BuildDesc
+  { bdInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
+  , bdOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
+  } deriving (Generic, Show)
+instance Binary BuildDesc
+
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
   , elCommand :: ByteString -- Mainly for debugging
-  , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
-  , elOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
+  , elBuildDescs :: [BuildDesc]
   , elStdoutputs :: StdOutputs ByteString
   , elSelfTime :: DiffTime
   } deriving (Generic, Show)
