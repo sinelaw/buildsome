@@ -15,7 +15,7 @@ import           Control.Monad (join)
 import           Data.Function (on)
 import           Data.IORef
 import           Lib.Exception (onException)
-import           Lib.IORef (atomicModifyIORef_)
+import           Lib.IORef (atomicModifyIORef'_)
 import           Lib.PriorityQueue (PriorityQueue, Priority)
 import qualified Lib.PriorityQueue as PriorityQueue
 
@@ -89,9 +89,9 @@ startAlloc priority (PoolAlloc stateRef) = do
       ps
       -- Got out, re-insert with different priority:
       $ \waiters' -> PoolStateWithoutTokens $ PriorityQueue.enqueue newPriority candidate waiters'
-    stopAllocation = join . atomicModifyIORef stateRef . removeCandidate
+    stopAllocation = join . atomicModifyIORef' stateRef . removeCandidate
     changeAllocationPriority newPriority =
-        atomicModifyIORef_ stateRef . changePriorityCandidate newPriority
+        atomicModifyIORef'_ stateRef . changePriorityCandidate newPriority
 
 -- NOTE: Must run alloc with proper masking!
 alloc :: Priority -> PoolAlloc a -> IO a
@@ -101,7 +101,7 @@ alloc priority = join . fmap finish . startAlloc priority
 release :: PoolAlloc a -> a -> IO ()
 release (PoolAlloc stateRef) token =
   -- E.mask_ would be enough here, but I assume uninterruptibleMask_ is as cheap
-  E.uninterruptibleMask_ $ join $ atomicModifyIORef stateRef f
+  E.uninterruptibleMask_ $ join $ atomicModifyIORef' stateRef f
   where
     f (PoolStateWithoutTokens waiters) =
       case PriorityQueue.dequeue waiters of

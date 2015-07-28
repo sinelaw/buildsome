@@ -51,7 +51,7 @@ tryInsert (SyncMap refMap) key action =
                 do putMVar mvar x
                    return (Inserted, x)
         E.mask_ . join $
-            atomicModifyIORef refMap $
+            atomicModifyIORef' refMap $
             \oldMap ->
                 case M.lookup key oldMap of
                     Just oldMVar -> (oldMap, (Old,) <$> readMVar oldMVar)

@@ -23,7 +23,7 @@ new body = do
   freshNames <- Fresh.new 0
   cancelActionsVar <- newIORef IntMap.empty
   body (AsyncContext freshNames cancelActionsVar) `finally` do
-    cancelActions <- atomicModifyIORef cancelActionsVar $ \x -> (error "Attempt to use AsyncContext when it is finalized", x)
+    cancelActions <- atomicModifyIORef' cancelActionsVar $ \x -> (error "Attempt to use AsyncContext when it is finalized", x)
     sequence_ $ IntMap.elems cancelActions
 
 -- TODO: spawnUnmasked

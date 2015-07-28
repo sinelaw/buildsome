@@ -884,7 +884,7 @@ makeImplicitInputs builtTargetsRef bte@BuildTargetEnv{..} entity accessDoc input
       buildManyWithParReleased (<> (": " <> accessDoc))
       bteImplicit entity $ map slaveReqForHookInput inputs
 
-    atomicModifyIORef_ builtTargetsRef (<> (targetParentsBuilt <> inputsBuilt))
+    atomicModifyIORef'_ builtTargetsRef (<> (targetParentsBuilt <> inputsBuilt))
   where
     slaveReqForHookInput (FSHook.Input accessType path) =
       slaveReqForAccessType accessType path
@@ -1249,7 +1249,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
       killOnce msg exception =
         void $ E.uninterruptibleMask_ $ runOnce $ do
           putLn IO.stderr msg
-          atomicModifyIORef_ errorRef $ maybe (Just exception) Just
+          atomicModifyIORef'_ errorRef $ maybe (Just exception) Just
           forkIO $ onAllSlaves CancelAndWait buildsome
       buildsome =
         Buildsome

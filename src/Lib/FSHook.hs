@@ -39,7 +39,7 @@ import Lib.FSHook.OutputBehavior (OutputEffect(..), OutputBehavior(..))
 import Lib.FSHook.Protocol (IsDelayed(..))
 import Lib.FilePath (FilePath, (</>), takeDirectory, canonicalizePath)
 import Lib.Fresh (Fresh)
-import Lib.IORef (atomicModifyIORef'_, atomicModifyIORef_)
+import Lib.IORef (atomicModifyIORef'_)
 import Lib.Printer (Printer)
 import Lib.Sock (recvFrame, recvLoop_, withUnixStreamListener)
 import Lib.TimeIt (timeIt)
@@ -277,8 +277,8 @@ withRegistered :: Ord k => IORef (Map k a) -> k -> a -> IO r -> IO r
 withRegistered registry key val =
   bracket_ register unregister
   where
-    register = atomicModifyIORef_ registry $ M.insert key val
-    unregister = atomicModifyIORef_ registry $ M.delete key
+    register = atomicModifyIORef'_ registry $ M.insert key val
+    unregister = atomicModifyIORef'_ registry $ M.delete key
 
 handleJobConnection :: String -> Socket -> RunningJob -> Need -> IO ()
 handleJobConnection tidStr conn job _need = do
@@ -338,7 +338,7 @@ withRunningJob fsHook jobId job body = do
     `onException` setJob (KillingJob (jobLabel job))
   where
     registry = fsHookRunningJobs fsHook
-    setJob = atomicModifyIORef_ registry . M.insert jobId
+    setJob = atomicModifyIORef'_ registry . M.insert jobId
 
 runCommand ::
   FSHook -> FilePath -> (Process.Env -> IO r) -> ColorText ->
