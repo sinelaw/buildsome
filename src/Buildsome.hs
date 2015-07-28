@@ -543,17 +543,13 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
     verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
-        let verify str getDesc mPair restore =
-              verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) restore
-            restore = refreshFromContentCache filePath (snd <$> mContentAccess) (snd <$> mStatAccess)
-        r1 <- verify "mode" (return (fileModeDescOfStat stat)) mModeAccess restore
-        when (not r1) $ do
-          r2 <- verify "stat" (return (fileStatDescOfStat stat)) mStatAccess restore
-          when (not r2) $ do
-            _ <- verify "content"
-                 (fileContentDescOfStat "When applying execution log (input)"
-                  db filePath stat) mContentAccess restore
-            return ()
+        let verify str getDesc mPair =
+              do _ <- verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) (return False)
+                 return ()
+        verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
+        verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
+        verify "content" (fileContentDescOfStat "When applying execution log (input)"
+                          db filePath stat) mContentAccess
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
