@@ -615,11 +615,12 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
         do  res <- runEitherT $executionLogVerifyFilesStateSingle bte buildDesc
             case res of
               Left (err, path) -> do
-                  liftIO $ printStrLn btePrinter $ bsRender bteBuildsome $ ColorText.simple $ mconcat $
-                    [ "Execution log of ", path
-                    , " did not match because ", err
-                    ]
-                  return ()
+                  let msg =
+                        bsRender bteBuildsome $ ColorText.simple $ mconcat $
+                        [ "Execution log of ", path
+                        , " did not match because ", err
+                        ]
+                  return (msg, path)
               Right x -> left x
 
       case mMatchingBuildDesc of
@@ -629,7 +630,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
               (M.keysSet bdInputsDescs) (M.keysSet bdOutputsDescs)
               elStdoutputs elSelfTime
           --Left x -> left ("Couldn't match any: ", "<TODO>")
-          _ -> left ("Couldn't match any: ", "<TODO>")
+          Right errors -> left (BS8.intercalate "\n" $ map fst errors, BS8.intercalate "\n" $ map snd errors)
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
