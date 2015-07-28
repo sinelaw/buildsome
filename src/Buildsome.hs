@@ -96,7 +96,7 @@ data Buildsome = Buildsome
     -- dynamic:
   , bsDb :: Db
   , bsFsHook :: FSHook
-  , bsSlaveByTargetRep :: SyncMap TargetRep (Parallelism.Entity, Slave Stats)
+  , bsSlaveByTargetRep :: SyncMap TargetRep (Parallelism.Entity, Slave ())
   , bsFreshPrinterIds :: Fresh Printer.Id
   , bsFastKillBuild :: E.SomeException -> IO ()
   , bsRender :: ColorText -> ByteString
@@ -272,7 +272,7 @@ isPhony bs path = path `S.member` bsPhoniesSet bs
 targetIsPhony :: Buildsome -> Target -> Bool
 targetIsPhony bs = all (isPhony bs) . targetOutputs
 
-slaveForDirectPath :: BuildTargetEnv -> FilePath -> IO (Maybe (Parallelism.Entity, Slave Stats))
+slaveForDirectPath :: BuildTargetEnv -> FilePath -> IO (Maybe (Parallelism.Entity, Slave ()))
 slaveForDirectPath bte@BuildTargetEnv{..} path
   | FilePath.isAbsolute path =
     -- Only project-relative paths may have output rules:
@@ -287,7 +287,7 @@ slaveForDirectPath bte@BuildTargetEnv{..} path
           bteExplicitlyDemanded || targetKind == BuildMaps.TargetSimple }
     (TargetDesc targetRep target)
 
-slavesForChildrenOf :: BuildTargetEnv -> FilePath -> IO [(Parallelism.Entity, Slave Stats)]
+slavesForChildrenOf :: BuildTargetEnv -> FilePath -> IO [(Parallelism.Entity, Slave ())]
 slavesForChildrenOf bte@BuildTargetEnv{..} path
   | FilePath.isAbsolute path = return [] -- Only project-relative paths may have output rules
   | not (null childPatterns) =
@@ -308,7 +308,7 @@ inputFilePath :: SlaveRequest -> FilePath
 inputFilePath (SlaveRequestDirect path) = path
 inputFilePath (SlaveRequestFull path) = path
 
-slavesFor :: BuildTargetEnv -> SlaveRequest -> IO [(Parallelism.Entity, Slave Stats)]
+slavesFor :: BuildTargetEnv -> SlaveRequest -> IO [(Parallelism.Entity, Slave ())]
 slavesFor bte (SlaveRequestDirect path) =
     maybeToList <$> slaveForDirectPath bte path
 slavesFor bte@BuildTargetEnv{..} (SlaveRequestFull path) = do
@@ -332,7 +332,7 @@ slaveReqForAccessType FSHook.AccessTypeStat =
 -- TODO: All 3 applications of this function concat in the same
 -- pattern, reduce code duplication
 waitForSlavesWithParReleased ::
-  BuildTargetEnv -> Parallelism.Entity -> [(Parallelism.Entity, Slave Stats)] -> IO BuiltTargets
+  BuildTargetEnv -> Parallelism.Entity -> [(Parallelism.Entity, Slave ())] -> IO BuiltTargets
 waitForSlavesWithParReleased _ _ [] = return mempty
 waitForSlavesWithParReleased BuildTargetEnv{..} entity forkedSlaves =
   Parallelism.withReleased btePrinter (bsParPool bteBuildsome) entity forks $
@@ -340,7 +340,7 @@ waitForSlavesWithParReleased BuildTargetEnv{..} entity forkedSlaves =
     whenVerbose bteBuildsome $
         Printer.printStrLn btePrinter $
         "Waiting for " <> ColorText.intercalate ", " (map Slave.str slaves)
-    stats <- mconcat <$> mapM Slave.wait slaves
+    let stats = mempty -- mconcat <$> mapM Slave.wait slaves
     return BuiltTargets { builtTargets = map Slave.target slaves, builtStats = stats }
   where
     forks = map fst forkedSlaves
@@ -739,7 +739,7 @@ fst3 :: (a, b, c) -> a
 fst3 (x, _, _) = x
 
 -- Find existing slave for target, or spawn a new one
-getSlaveForTarget :: BuildTargetEnv -> TargetDesc -> IO (Parallelism.Entity, Slave Stats)
+getSlaveForTarget :: BuildTargetEnv -> TargetDesc -> IO (Parallelism.Entity, Slave ())
 getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
   | any ((== tdRep) . fst3) bteParents =
     E.throwIO $ TargetDependencyLoop (bsRender bteBuildsome) newParents
@@ -1108,14 +1108,16 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} mOldLog =
     verbosityCommands = Opts.verbosityCommands verbosity
     verbosity = optVerbosity (bsOpts bteBuildsome)
 
-buildTarget :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO Stats
+force x = (length (show x :: String)) `seq` x
+
+buildTarget :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO ()
 buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
   maybeRedirectExceptions bte TargetDesc{..} $ do
     (explicitPathsBuilt, hintedBuiltTargets) <- buildTargetHints bte entity tdTarget
     case explicitPathsBuilt of
       ExplicitPathsNotBuilt ->
         -- Failed to build our hints when allowed, just leave with collected stats
-        return $ builtStats hintedBuiltTargets
+        return () -- $ builtStats hintedBuiltTargets
       ExplicitPathsBuilt -> do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
         (whenBuilt, (Db.ExecutionLog{..}, builtTargets)) <-
@@ -1123,19 +1125,21 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
           Right res -> return (Stats.FromCache, res)
           Left mRes -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..} mRes
         let BuiltTargets deps stats = hintedBuiltTargets <> builtTargets
-        return $ stats <>
-          Stats
-          { Stats.ofTarget =
-               M.singleton tdRep Stats.TargetStats
-               { tsWhen = whenBuilt
-               , tsTime = elSelfTime
-               , tsDirectDeps = deps
-               }
-          , Stats.stdErr =
-            if mempty /= stdErr elStdoutputs
-            then S.singleton tdRep
-            else S.empty
-          }
+        return ()
+        --     res = stats <>
+        --           Stats
+        --           { Stats.ofTarget =
+        --                M.singleton tdRep Stats.TargetStats
+        --                { tsWhen = whenBuilt
+        --                , tsTime = elSelfTime
+        --                , tsDirectDeps = deps
+        --                }
+        --           , Stats.stdErr =
+        --             if mempty /= stdErr elStdoutputs
+        --             then S.singleton tdRep
+        --             else S.empty
+        --           }
+        -- return $ res
   where
     Color.Scheme{..} = Color.scheme
 
