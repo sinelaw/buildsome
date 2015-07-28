@@ -541,7 +541,7 @@ executionLogVerifyFilesStateSingle
      -> Db.BuildDesc -> EitherT (ByteString, FilePath) m Db.BuildDesc
 executionLogVerifyFilesStateSingle BuildTargetEnv{..} buildDesc@Db.BuildDesc{..} =
   do
-      forM_ (M.toList bdInputsDescs) $ \(filePath, desc) ->
+      forM_ (M.toList $ dropReasons bdInputsDescs) $ \(filePath, desc) ->
         verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
           when (Posix.modificationTimeHiRes stat /= mtime) $ do
             let verify str getDesc mPair =
@@ -627,7 +627,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
           Left Db.BuildDesc{..} ->
             liftIO $
               replayExecutionLog bte tdTarget
-              (M.keysSet bdInputsDescs) (M.keysSet bdOutputsDescs)
+              (M.keysSet $ dropReasons bdInputsDescs) (M.keysSet bdOutputsDescs)
               elStdoutputs elSelfTime
           --Left x -> left ("Couldn't match any: ", "<TODO>")
           Right errors -> left ("Couldn't match any match", "<TODO>") -- left (BS8.intercalate "\n" $ map fst errors, BS8.intercalate "\n" $ map snd errors)
@@ -639,7 +639,8 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.Executio
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  let allInputDescs = concatMap (M.toList . Db.bdInputsDescs) $ elBuildDescs
+  putStrLn $ "executionLogBuildInputs"
+  let allInputDescs = concatMap (M.toList . dropReasons . Db.bdInputsDescs) $ elBuildDescs
   speculativeSlaves <- concat <$> mapM mkInputSlaves allInputDescs
   waitForSlavesWithParReleased bte entity speculativeSlaves
   where
@@ -973,13 +974,18 @@ runCmd bte@BuildTargetEnv{..} entity target = do
 mkTargetWithHashPath :: Buildsome -> ByteString -> FilePath
 mkTargetWithHashPath buildsome contentHash = bsBuildsomePath buildsome </> "cached_outputs" </> Base16.encode contentHash-- (outPath <> "." <> Base16.encode contentHash)
 
+
+force x = (length (show x :: String)) `seq` x
+
+dropReasons = id
+
 makeExecutionLog ::
   Buildsome -> Target ->
   Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
   [FilePath] -> StdOutputs ByteString -> DiffTime -> Maybe Db.ExecutionLog
   -> IO Db.ExecutionLog
 makeExecutionLog buildsome target inputs outputs stdOutputs selfTime mOldLog = do
-  inputsDescs <- M.traverseWithKey inputAccess inputs
+  inputsDescs <- dropReasons <$> M.traverseWithKey inputAccess inputs
   outputDescPairs <-
     forM outputs $ \outPath -> do
       mStat <- Dir.getMFileStatus outPath
@@ -1011,7 +1017,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime mOldLog = d
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
     , elBuildDescs = Db.BuildDesc
-                     { Db.bdInputsDescs = inputsDescs
+                     { Db.bdInputsDescs = dropReasons $ inputsDescs
                      , Db.bdOutputsDescs = M.fromList outputDescPairs
                      } : (maybe [] Db.elBuildDescs mOldLog)
 
@@ -1106,7 +1112,6 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} mOldLog =
     verbosityCommands = Opts.verbosityCommands verbosity
     verbosity = optVerbosity (bsOpts bteBuildsome)
 
-force x = (length (show x :: String)) `seq` x
 
 buildTarget :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO ()
 buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =

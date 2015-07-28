@@ -1,5 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric, OverloadedStrings, RecordWildCards #-}
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
@@ -39,6 +39,7 @@ import Lib.TimeInstances ()
 import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Set as S
+import qualified Data.Map as M
 import qualified Database.LevelDB.Base as LevelDB
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
@@ -103,8 +104,26 @@ leakedOutputsRef = dbLeakedOutputs
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
 setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
 
+force x = (length (show x :: String)) `seq` x
+dropReasons r =
+  force $ (flip M.map) r $ \fdesc ->
+    case fdesc of
+      FileDescNonExisting _ -> FileDescNonExisting ""
+      FileDescExisting (x, InputDesc{..}) ->
+          FileDescExisting (x, InputDesc
+                               { idModeAccess = dropFstReason idModeAccess
+                               , idStatAccess = dropFstReason idStatAccess
+                               , idContentAccess = dropFstReason idContentAccess
+                               })
+  where dropFstReason Nothing = Nothing
+        dropFstReason (Just (_, x)) = Just ("reason", x)
+
+
 getKey :: (Show a, Binary a) => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey db key = do
+    v <- (fmap decode) <$> LevelDB.get (dbLevel db) def key
+--    putStrLn . BS8.unpack $ "getKey: " <> key <> " = " <> (BS8.pack $ show v)
+    return v
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def
@@ -153,8 +172,16 @@ mkIRefKey key db = IRef
   }
 
 executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog target = mkIRefKey targetKey
+executionLog target db =
+    ir
+    {
+      readIRef = (force . fmap fixElog) <$> readIRef ir
+    }
   where
+    fixElog elog =
+      elog
+        { elBuildDescs = map (\x@BuildDesc{..} -> x { bdInputsDescs = dropReasons bdInputsDescs }) $ elBuildDescs elog }
+    ir = mkIRefKey targetKey db
     targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
