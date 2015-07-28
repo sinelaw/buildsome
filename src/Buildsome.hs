@@ -508,10 +508,10 @@ syncCatchAndLogSpeculativeErrors :: Printer -> TargetDesc -> (E.SomeException ->
 syncCatchAndLogSpeculativeErrors printer TargetDesc{..} errRes =
   handleSync $ \e ->
   do
-    unless (isThreadKilled e) $
-      Print.posMessage printer (targetPos tdTarget) $ cWarning $
-      "Warning: Ignoring failed build of speculative target: " <>
-      cTarget (show tdRep) <> " " <> showFirstLine e
+    -- unless (isThreadKilled e) $
+    --   Print.posMessage printer (targetPos tdTarget) $ cWarning $
+    --   "Warning: Ignoring failed build of speculative target: " <>
+    --   cTarget (show tdRep) <> " " <> showFirstLine e
     return (errRes e)
   where
     Color.Scheme{..} = Color.scheme
@@ -875,11 +875,11 @@ makeImplicitInputs ::
 makeImplicitInputs builtTargetsRef bte@BuildTargetEnv{..} entity accessDoc inputs outputs =
   do
     targetParentsBuilt <-
-      buildManyWithParReleased (("Container directory of: " <>) . (<> (" " <> accessDoc)))
+      buildManyWithParReleased (("Container directory of: " <>) . (<> (" " <> "accessDoc")))
       bteImplicit entity $ map SlaveRequestDirect $ parentDirs allPaths
 
     inputsBuilt <-
-      buildManyWithParReleased (<> (": " <> accessDoc))
+      buildManyWithParReleased (<> (": " <> "accessDoc"))
       bteImplicit entity $ map slaveReqForHookInput inputs
 
     atomicModifyIORef'_ builtTargetsRef (<> (targetParentsBuilt <> inputsBuilt))
