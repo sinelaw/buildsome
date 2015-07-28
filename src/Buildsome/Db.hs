@@ -103,8 +103,9 @@ leakedOutputsRef = dbLeakedOutputs
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
 setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
 
-getKey :: Binary a => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey :: (Show a, Binary a) => Db -> ByteString -> IO (Maybe a)
+getKey db key = (force . fmap decode) <$> LevelDB.get (dbLevel db) def key
+    where force x = length (show x) `seq` x
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def
@@ -145,7 +146,7 @@ data IRef a = IRef
   , delIRef :: IO ()
   }
 
-mkIRefKey :: Binary a => ByteString -> Db -> IRef a
+mkIRefKey :: (Show a, Binary a) => ByteString -> Db -> IRef a
 mkIRefKey key db = IRef
   { readIRef = getKey db key
   , writeIRef = setKey db key
@@ -165,7 +166,7 @@ type MFileContentDesc = FileDesc () FileContentDesc
 data MakefileParseCache = MakefileParseCache
   { mpcInputs :: (FilePath, Map FilePath MFileContentDesc)
   , mpcOutput :: (Makefile, [PutStrLn])
-  } deriving (Generic)
+  } deriving (Generic, Show)
 instance Binary MakefileParseCache
 
 makefileParseCache :: Db -> Makefile.Vars -> IRef MakefileParseCache
