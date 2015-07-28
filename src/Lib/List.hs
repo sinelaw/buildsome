@@ -1,5 +1,7 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 module Lib.List (filterA, unprefixed, unsuffixed) where
 
+import Prelude.Compat
 
 import Data.List (isPrefixOf, isSuffixOf)
 
