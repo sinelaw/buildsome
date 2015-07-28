@@ -82,7 +82,7 @@ import           System.Process (CmdSpec(..))
 import           Text.Parsec (SourcePos)
 import qualified Data.ByteString.Base16 as Base16
 
-type Parents = [(TargetRep, Target, Reason)]
+type Parents = [(TargetRep, Target, ())]
 
 data Buildsome = Buildsome
   { -- static:
@@ -238,7 +238,7 @@ want printer buildsome reason paths = do
   entity <- Parallelism.rootEntity $ bsParPool buildsome
   (buildTime, (ExplicitPathsBuilt, builtTargets)) <-
     timeIt $ buildExplicitWithParReleased bte entity $ map SlaveRequestDirect paths
-  let stdErrs = Stats.stdErr $ builtStats builtTargets
+  let stdErrs = S.empty -- Stats.stdErr $ builtStats builtTargets
       lastLinePrefix
         | not (S.null stdErrs) =
           cWarning $ "Build Successful, but with STDERR from: " <>
@@ -258,9 +258,9 @@ fromBytestring8 = fromString . BS8.unpack
 showParents :: Parents -> ColorText
 showParents = mconcat . map showParent
   where
-    showParent (targetRep, target, reason) = mconcat
+    showParent (targetRep, target, ()) = mconcat
       [ "\n", Print.posText (targetPos target), " "
-      , cTarget (show targetRep), " (", reason, ")"
+      , cTarget (show targetRep) -- , " (", reason, ")"
       ]
     Color.Scheme{..} = Color.scheme
 
@@ -436,11 +436,12 @@ replayExecutionLog ::
   Set FilePath -> Set FilePath ->
   StdOutputs ByteString -> DiffTime -> IO ()
 replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfTime =
-  Print.replay btePrinter target stdOutputs ""
-  (optVerbosity (bsOpts bteBuildsome)) selfTime $
-  -- We only register legal outputs that were CREATED properly in the
-  -- execution log, so all outputs keep no old content
-  void $ verifyTargetSpec bte inputs outputs target
+    return ()
+  -- Print.replay btePrinter target stdOutputs ""
+  -- (optVerbosity (bsOpts bteBuildsome)) selfTime $
+  -- -- We only register legal outputs that were CREATED properly in the
+  -- -- execution log, so all outputs keep no old content
+  -- void $ verifyTargetSpec bte inputs outputs target
 
 verifyFileDesc ::
   (IsString str, Monoid str, MonadIO m) =>
@@ -544,7 +545,7 @@ executionLogVerifyFilesStateSingle BuildTargetEnv{..} buildDesc@Db.BuildDesc{..}
         verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
           when (Posix.modificationTimeHiRes stat /= mtime) $ do
             let verify str getDesc mPair =
-                  do _ <- verifyMDesc ("input(" <> str <> ")") filePath getDesc (snd <$> mPair) (return False)
+                  do _ <- verifyMDesc ("input()") filePath getDesc (snd <$> mPair) (return False)
                      return ()
             verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
             verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
@@ -577,7 +578,7 @@ executionLogVerifyFilesStateSingle BuildTargetEnv{..} buildDesc@Db.BuildDesc{..}
           wasRestored <- liftIO restore
           if wasRestored
           then return True
-          else left $ (str <> ": " <> BS8.intercalate ", " reasons, filePath)
+          else left $ ("reasons", "filepath") -- (str <> ": " <> BS8.intercalate ", " reasons, filePath)
 
     refreshFromContentCache filePath oldDesc oldStatDesc =
       case (oldDesc, oldStatDesc) of
@@ -591,8 +592,8 @@ executionLogVerifyFilesStateSingle BuildTargetEnv{..} buildDesc@Db.BuildDesc{..}
               then
                 do
                     printStrLn btePrinter $ bsRender bteBuildsome $ ColorText.simple
-                      $ mconcat [ "Copying: " <> cachedPath <> " -> " <> filePath
-                                , " - stat: " <> show fullStat ]
+                      $ "bla" -- mconcat [ "Copying: " <> cachedPath <> " -> " <> filePath
+                                --, " - stat: " <> show fullStat ]
                     if newExists
                     then removeFileOrDirectoryOrNothing filePath
                     else return ()
@@ -658,15 +659,15 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} Db.Executio
       -- The access may be larger than mode-only, but we only need to
       -- know if it exists or not because we only need to know whether
       -- the execution log will be re-used or not, not more.
-      Just (depReason, FSHook.AccessTypeModeOnly)
+      Just ("depReason", FSHook.AccessTypeModeOnly)
     fromFileDesc (Db.FileDescExisting (_mtime, inputDesc)) =
       case inputDesc of
       Db.InputDesc { Db.idContentAccess = Just (depReason, _) } ->
-        Just (depReason, FSHook.AccessTypeFull)
+        Just ("depReason", FSHook.AccessTypeFull)
       Db.InputDesc { Db.idStatAccess = Just (depReason, _) } ->
-        Just (depReason, FSHook.AccessTypeModeOnly)
+        Just ("depReason", FSHook.AccessTypeModeOnly)
       Db.InputDesc { Db.idModeAccess = Just (depReason, _) } ->
-        Just (depReason, FSHook.AccessTypeStat)
+        Just ("depReason", FSHook.AccessTypeStat)
       Db.InputDesc Nothing Nothing Nothing -> Nothing
 
 parentDirs :: [FilePath] -> [FilePath]
@@ -696,10 +697,10 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity TargetDesc{..} = do
         Left (SpeculativeBuildFailure exception)
           | isThreadKilled exception -> return $ Left (Just executionLog)
         Left err -> do
-          printStrLn btePrinter $ bsRender bteBuildsome $ mconcat $
-            [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
-            , " did not match because ", describeError err
-            ]
+          -- printStrLn btePrinter $ bsRender bteBuildsome $ mconcat $
+          --   [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
+          --   , " did not match because ", describeError err
+          --   ]
           return $ Left (Just executionLog)
         Right res -> return (Right res)
   where
@@ -773,7 +774,7 @@ getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
       return (fork, slave)
     where
       Color.Scheme{..} = Color.scheme
-      newParents = (tdRep, tdTarget, "") : bteParents
+      newParents = (tdRep, tdTarget, ()) : bteParents
       panicHandler e@E.SomeException {} =
         panic (bsRender bteBuildsome) $ "FAILED during making of slave: " ++ show e
       panicOnError = handle panicHandler
