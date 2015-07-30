@@ -1,14 +1,14 @@
+{-# LANGUAGE DeriveFoldable    #-}
+{-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE DeriveFunctor     #-}
-{-# LANGUAGE DeriveFoldable    #-}
-{-# LANGUAGE DeriveTraversable #-}
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
-  , InputDesc(..), FileDesc(..)
+  , InputDesc(..), FileDesc(..), InputSummary(..)
   , OutputDesc(..)
   , ExecutionLog(..), executionLog
   , ExecutionSummary(..), executionSummary
@@ -29,7 +29,6 @@ import qualified Data.ByteString.Char8   as BS8
 import           Data.Default            (def)
 import           Data.IORef
 import           Data.Map                (Map)
-import           Data.Maybe              (fromMaybe)
 import           Data.Monoid             ((<>))
 import           Data.Set                (Set)
 import qualified Data.Set                as S
@@ -41,9 +40,8 @@ import           Lib.Binary              (decode, encode)
 import           Lib.ColorText           (ColorText)
 import           Lib.Directory           (catchDoesNotExist, createDirectories, makeAbsolutePath)
 import           Lib.Exception           (bracket)
-import           Lib.FileDesc            (FileContentDesc, FileModeDesc, FileStatDesc)
+import           Lib.FileDesc            (FileContentDesc, FileModeDesc, FileStatDesc (..), fileModeDescOfStatDesc)
 import           Lib.FilePath            (FilePath, (<.>), (</>))
-import qualified Lib.FSHook              as FSHook
 import           Lib.Makefile            (Makefile)
 import qualified Lib.Makefile            as Makefile
 import           Lib.Makefile.Monad      (PutStrLn)
@@ -75,12 +73,6 @@ data InputDesc = InputDesc
   } deriving (Generic, Show)
 instance Binary InputDesc
 
-inputDescAccessType :: InputDesc -> Maybe FSHook.AccessType
-inputDescAccessType InputDesc { idContentAccess = Just _ } = Just FSHook.AccessTypeFull
-inputDescAccessType InputDesc { idStatAccess = Just _ } = Just FSHook.AccessTypeStat
-inputDescAccessType InputDesc { idModeAccess = Just _ } = Just FSHook.AccessTypeModeOnly
-inputDescAccessType _ = Nothing
-
 data FileDesc ne e
   = FileDescNonExisting !ne
   | FileDescExisting !e
@@ -97,8 +89,15 @@ data OutputDesc = OutputDesc
   } deriving (Generic, Show)
 instance Binary OutputDesc
 
+data InputSummary
+  = InputMTime POSIXTime
+  -- For dirs, this is for stat/existence only check
+  | InputModeDesc FileModeDesc
+  deriving (Generic, Show)
+instance Binary InputSummary
+
 data ExecutionSummary = ExecutionSummary
-  { esInputsDescs  :: Map FilePath (FileDesc () (POSIXTime, FSHook.AccessType))
+  { esInputsDescs  :: Map FilePath (FileDesc () InputSummary)
   , esOutputsDescs :: Map FilePath (FileDesc () (POSIXTime, OutputDesc))
   , esSelfTime     :: DiffTime
   , esStdErr       :: ByteString
@@ -115,20 +114,26 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-second :: (b -> b') -> (a, b) -> (a, b')
-second f (x, y) = (x, f y)
-
 summarizeExecutionLog :: ExecutionLog -> ExecutionSummary
 summarizeExecutionLog ExecutionLog{..} =
   ExecutionSummary
-  { esInputsDescs = bimapFileDesc (const ()) (second assertAccessType) <$> elInputsDescs
+  { esInputsDescs = bimapFileDesc (const ()) summarizeInput <$> elInputsDescs
   , esOutputsDescs = elOutputsDescs
   , esSelfTime = elSelfTime
   , esStdErr = stdErr elStdoutputs
   }
   where
-    assertAccessType =
-      fromMaybe (error "Input accessed but no access type?!") . inputDescAccessType
+    summarizeInput (mtime, inputDesc) =
+      case inputDesc of
+        InputDesc
+          { idModeAccess = Just (_, modeDesc)
+          , idStatAccess = Nothing
+          , idContentAccess = Nothing } -> InputModeDesc modeDesc
+        InputDesc { idContentAccess = Just _ } -> InputMTime mtime
+        InputDesc { idStatAccess = Just (_, s@FileStatDirectory{}) } ->
+            InputModeDesc $ fileModeDescOfStatDesc s
+        InputDesc { idStatAccess = Just _ } -> InputMTime mtime
+        InputDesc Nothing Nothing Nothing -> error "Input accessed but no access type?!"
 
 registeredOutputsRef :: Db -> IORef (Set FilePath)
 registeredOutputsRef = dbRegisteredOutputs
