@@ -44,7 +44,7 @@ import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
 
 schemaVersion :: ByteString
-schemaVersion = "schema.ver.17"
+schemaVersion = "schema.ver.18"
 
 data Db = Db
   { dbLevel :: LevelDB.DB
@@ -83,7 +83,7 @@ data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
   , elCommand :: ByteString -- Mainly for debugging
   , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
-  , elOutputsDescs :: Map FilePath (FileDesc () OutputDesc)
+  , elOutputsDescs :: Map FilePath (FileDesc () (POSIXTime, OutputDesc))
   , elStdoutputs :: StdOutputs ByteString
   , elSelfTime :: DiffTime
   } deriving (Generic, Show)
