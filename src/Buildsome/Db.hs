@@ -52,7 +52,7 @@ import           Lib.TimeInstances       ()
 import qualified System.Posix.ByteString as Posix
 
 schemaVersion :: ByteString
-schemaVersion = "schema.ver.18"
+schemaVersion = "schema.ver.19"
 
 data Db = Db
   { dbLevel             :: LevelDB.DB
