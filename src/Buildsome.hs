@@ -957,7 +957,7 @@ runCmd bte@BuildTargetEnv{..} entity target = do
 inputAccess ::
   Db -> FilePath ->
   (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-  IO (Db.FileDesc Reason (POSIXTime, Db.InputDesc))
+  IO (Db.FileDesc Reason (POSIXTime, Db.InputDesc Reason))
 inputAccess db path (accessTypes, mStat) =
   case mStat of
   Nothing -> do
