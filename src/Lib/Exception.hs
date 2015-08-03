@@ -32,10 +32,10 @@ finally :: IO a -> IO () -> IO a
 action `finally` cleanup =
   E.mask $ \restore -> do
     res <- restore action
-      `catch` \e@E.SomeException {} -> do
-        cleanup `logErrors` ("overrides original error (" ++ show e ++ ")")
-        E.throwIO e
-    E.uninterruptibleMask_ cleanup `logErrors` "during successful finally cleanup"
+      -- `catch` \e@E.SomeException {} -> do
+      --   cleanup `logErrors` ("overrides original error (" ++ show e ++ ")")
+      --   E.throwIO e
+    E.uninterruptibleMask_ cleanup -- `logErrors` "during successful finally cleanup"
     return res
 
 infixl 1 `catch`
