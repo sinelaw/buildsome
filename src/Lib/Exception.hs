@@ -57,8 +57,9 @@ onExceptionWith act f =
 
 infixl 1 `logErrors`
 logErrors :: IO a -> String -> IO a
-logErrors act prefix = onExceptionWith act $ \e ->
-  putLn IO.stderr (prefix ++ ": " ++ show e)
+-- logErrors act prefix = onExceptionWith act $ \e ->
+--   putLn IO.stderr (prefix ++ ": " ++ show e)
+logErrors act _ = act
 
 bracket :: IO a -> (a -> IO ()) -> (a -> IO b) -> IO b
 bracket before after = E.bracket before (E.uninterruptibleMask_ . after)
