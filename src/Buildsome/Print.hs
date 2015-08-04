@@ -55,7 +55,7 @@ targetWrap ::
 targetWrap printer reason target str =
   Printer.printWrap cPrinter printer
   (cTarget (show (targetOutputs target))) $
-  mconcat [str, " (", reason, ")"]
+  mconcat [str, " (", show reason, ")"]
   where
     Color.Scheme{..} = Color.scheme
 
@@ -123,7 +123,7 @@ replay printer target stdOutputs reason verbosity selfTime action = do
     replayCmd (verbosityCommands verbosity) printer target
     targetStdOutputs printer target stdOutputs
   where
-    header = "REPLAY for target " <> cTarget (show (targetOutputs target)) <> " (" <> reason <> ")"
+    header = "REPLAY for target " <> cTarget (show (targetOutputs target)) <> " (" <> show reason <> ")"
     shouldPrint =
       case verbosityOutputs verbosity of
       PrintOutputsAnyway -> True
