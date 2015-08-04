@@ -188,6 +188,9 @@ with printer ldPreloadPath body = do
 sendGo :: Socket -> IO ()
 sendGo conn = void $ SockBS.send conn (BS8.pack "GO")
 
+dummyAct :: ColorText
+dummyAct = ""
+
 {-# INLINE handleJobMsg #-}
 handleJobMsg :: String -> Socket -> RunningJob -> Protocol.Msg -> IO ()
 handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
@@ -241,7 +244,7 @@ handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
     handleDelayed   inputs outputs = wrap $ delayedFSAccessHandler handlers actDesc inputs outputs
     handleUndelayed inputs outputs = wrap $ undelayedFSAccessHandler handlers actDesc inputs outputs
     wrap = wrapHandler job conn isDelayed
-    actDesc = fromString (Protocol.showFunc func) <> " done by " <> jobLabel job
+    actDesc = dummyAct -- fromString (Protocol.showFunc func) <> " done by " <> jobLabel job
     handleInput accessType path = handleInputs [Input accessType path]
     handleInputs inputs =
       case isDelayed of
