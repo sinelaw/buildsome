@@ -44,7 +44,7 @@ import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
 
 schemaVersion :: ByteString
-schemaVersion = "schema.ver.19.joblabel"
+schemaVersion = "schema.ver.19.no_ad"
 
 data Db = Db
   { dbLevel :: LevelDB.DB
