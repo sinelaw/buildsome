@@ -52,6 +52,7 @@ data Db = Db
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
   , dbCachedStats :: IORef (Map FilePath (Maybe Posix.FileStatus))
+  , dbCachedLogs :: IORef (Bool, Map FilePath ExecutionLog)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -132,10 +133,15 @@ with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
   statCache <- newIORef M.empty
+  logCache <- newIORef (False, M.empty)
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
-    withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs statCache)
+    withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs -> do
+      let db = (Db levelDb registeredOutputs leakedOutputs statCache logCache)
+      load db
+      r <- body db
+      save db
+      return r
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -160,13 +166,53 @@ mkIRefKey key db = IRef
   , delIRef = deleteKey db key
   }
 
+mkMemIRef :: Ord k => k -> IORef (Bool, Map k a) -> IRef a
+mkMemIRef th ioRef = IRef
+   {
+    readIRef = (M.lookup th . snd) <$> readIORef ioRef
+   , writeIRef = \v -> do
+      atomicModifyIORef' ioRef
+          (\(_, cache) -> ((True, M.insert th v cache), ()))
+   , delIRef = do
+      atomicModifyIORef' ioRef
+          (\(_, cache) -> ((True, M.delete th cache), ()))
+   }
+
 executionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-executionLog target = mkIRefKey targetKey
+executionLog target db = mkMemIRef targetKey (dbCachedLogs db)
   where
     targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
+
+load' :: (Binary k, Binary a) => String -> IORef (Bool, (Map k a)) -> IO ()
+load' name ioRef = do
+    putStrLn "Loading db..."
+    cacheBS <- BS8.readFile name
+    let cache = if BS8.null cacheBS
+                 then M.empty
+                 else decode cacheBS
+    putStrLn "Done loading db."
+    atomicWriteIORef ioRef (False, cache)
+
+save' :: Binary a => String -> IORef (Bool, a) -> IO ()
+save' name ioRef = do
+    putStrLn "Saving db..."
+    (changed, val) <- readIORef ioRef
+    if changed
+    then BS8.writeFile name $ encode val
+    else return ()
+    putStrLn "Done saving db."
+
+load :: Db -> IO ()
+load db = do
+    load' "Buildsome.mk.db/mtimeLog" (dbCachedLogs db)
+
+save :: Db -> IO ()
+save db = do
+    save' "Buildsome.mk.db/mtimeLog" (dbCachedLogs db)
+
 
 type MFileContentDesc = FileDesc () FileContentDesc
 
