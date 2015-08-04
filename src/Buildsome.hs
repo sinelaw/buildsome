@@ -49,7 +49,7 @@ import           Data.Typeable (Typeable)
 import qualified Lib.Cmp as Cmp
 import           Lib.ColorText (ColorText)
 import qualified Lib.ColorText as ColorText
-import           Lib.Directory (getMFileStatus, removeFileOrDirectory, removeFileOrDirectoryOrNothing)
+import           Lib.Directory (removeFileOrDirectory, removeFileOrDirectoryOrNothing, getMFileStatusCached)
 import qualified Lib.Directory as Dir
 import           Lib.Exception (finally, logErrors, handle, catch, handleSync, putLn)
 import           Lib.FSHook (FSHook, OutputBehavior(..), OutputEffect(..))
@@ -445,11 +445,11 @@ replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfT
 
 verifyFileDesc ::
   (IsString str, Monoid str, MonadIO m) =>
-  str -> FilePath -> Db.FileDesc ne desc ->
+  Db -> str -> FilePath -> Db.FileDesc ne desc ->
   (Posix.FileStatus -> desc -> EitherT (str, FilePath) m ()) ->
   EitherT (str, FilePath) m ()
-verifyFileDesc str filePath fileDesc existingVerify = do
-  mStat <- liftIO $ Dir.getMFileStatus filePath
+verifyFileDesc db str filePath fileDesc existingVerify = do
+  mStat <- liftIO $ Dir.getMFileStatusCached (Db.dbCachedStats db) filePath
   case (mStat, fileDesc) of
     (Nothing, Db.FileDescNonExisting _) -> return ()
     (Just stat, Db.FileDescExisting desc) -> existingVerify stat desc
@@ -540,7 +540,7 @@ executionLogVerifyFilesState ::
   EitherT (ByteString, FilePath) m ()
 executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
   forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
-    verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
+    verifyFileDesc db "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
       when (Posix.modificationTimeHiRes stat /= mtime) $ do
         let verify str getDesc mPair =
               verifyMDesc ("input(" <> str <> ")") filePath getDesc $ snd <$> mPair
@@ -553,7 +553,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionL
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
   forM_ (M.toList elOutputsDescs) $ \(filePath, outputDesc) ->
-    verifyFileDesc "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
+    verifyFileDesc db "output" filePath outputDesc $ \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
       verifyDesc  "output(stat)"    filePath (return (fileStatDescOfStat stat)) oldStatDesc
       verifyMDesc "output(content)" filePath
         (fileContentDescOfStat "When applying execution log (output)"
@@ -754,7 +754,7 @@ removeOldUnregisteredOutput printer buildsome path =
 
 removeOldOutput :: Printer -> Buildsome -> Set FilePath -> FilePath -> IO ()
 removeOldOutput printer buildsome registeredOutputs path = do
-  mStat <- getMFileStatus path
+  mStat <- getMFileStatusCached (Db.dbCachedStats $ bsDb buildsome) path
   case mStat of
     Nothing -> return () -- Nothing to do
     Just _
@@ -788,10 +788,11 @@ undelayedOutputEffect (FSHook.OutFilePath _ effect) =
   _ -> True
 
 recordInput ::
+  Db ->
   IORef (Map FilePath (Map FSHook.AccessType Reason, Maybe Posix.FileStatus)) ->
   Reason -> FSHook.Input -> IO ()
-recordInput inputsRef reason (FSHook.Input accessType path) = do
-  mStat <- getMFileStatus path
+recordInput db inputsRef reason (FSHook.Input accessType path) = do
+  mStat <- getMFileStatusCached (Db.dbCachedStats db) path
   atomicModifyIORef'_ inputsRef $ M.insertWith merge path
     (newAccessTypes, mStat)
   where
@@ -881,7 +882,7 @@ fsAccessHandlers outputsRef inputsRef builtTargetsRef bte@BuildTargetEnv{..} ent
         filteredOutputs <- fmap (S.fromList . catMaybes) $ mapM addMEffect outputs
         recordOutputs bteBuildsome outputsRef reason
           targetOutputsSet filteredOutputs
-        mapM_ (recordInput inputsRef reason) $
+        mapM_ (recordInput (bsDb bteBuildsome) inputsRef reason) $
           filter ((`M.notMember` recordedOutputs) . FSHook.inputPath) inputs
 
 runCmd :: BuildTargetEnv -> Parallelism.Entity -> Target -> IO RunCmdResults

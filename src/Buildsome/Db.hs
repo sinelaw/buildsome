@@ -1,7 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
 module Buildsome.Db
-  ( Db, with
+  ( Db(..), with
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..), FileDesc(..)
   , OutputDesc(..)
@@ -39,6 +39,7 @@ import Lib.TimeInstances ()
 import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Set as S
+import qualified Data.Map as M
 import qualified Database.LevelDB.Base as LevelDB
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
@@ -50,6 +51,7 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
+  , dbCachedStats :: IORef (Map FilePath (Maybe Posix.FileStatus))
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -129,10 +131,11 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
+  statCache <- newIORef M.empty
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs)
+    body (Db levelDb registeredOutputs leakedOutputs statCache)
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)

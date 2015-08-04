@@ -1,6 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 module Lib.Directory
-  ( getMFileStatus
+  ( getMFileStatus, getMFileStatusCached
   , catchDoesNotExist
   , removeFileOrDirectory
   , removeFileOrDirectoryOrNothing
@@ -16,6 +16,8 @@ import Control.Monad
 import Lib.Exception (bracket)
 import Lib.FilePath (FilePath, (</>))
 import System.IO.Error
+import qualified Data.Map as M
+import Data.IORef
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as BS8
 import qualified Lib.FilePath as FilePath
@@ -28,6 +30,19 @@ catchDoesNotExist act handler =
   if isDoesNotExistErrorType (ioeGetErrorType e)
   then handler
   else E.throwIO e
+
+getMFileStatusCached ::
+  IORef (M.Map FilePath (Maybe Posix.FileStatus))
+  -> FilePath -> IO (Maybe Posix.FileStatus)
+getMFileStatusCached cache path = do
+  mStatus <- M.lookup path <$> readIORef cache
+  case mStatus of
+    Nothing -> do
+      status <- getMFileStatus path
+      atomicModifyIORef' cache (\m -> (M.insert path status m, ()))
+      return status
+    Just status ->
+      return $ status
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
 getMFileStatus path = do
