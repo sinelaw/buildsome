@@ -21,6 +21,7 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BS8L
 import qualified Data.Map as Map
 import qualified Lib.Revisit as Revisit
+import qualified Lib.FilePath as FilePath
 
 type M = Revisit.M TargetRep Identity
 
@@ -36,9 +37,9 @@ buildCommands cwd stats target =
         [file]
           | not (BS8.null (targetCmds target)) ->
             [ Aeson.object
-              [ "directory" .= BS8.unpack cwd
+              [ "directory" .= FilePath.toString cwd
               , "command" .= BS8.unpack (targetCmds target)
-              , "file" .= BS8.unpack file
+              , "file" .= FilePath.toString file
               ]
             ]
         _ -> []
@@ -54,6 +55,6 @@ buildCommandsTargets cwd stats = fmap concat . mapM (buildCommands cwd stats)
 make :: FilePath -> Stats -> [Target] -> FilePath -> IO ()
 make cwd stats rootTargets filePath = do
   putStrLn $ "Writing clang commands to: " ++ show (cwd </> filePath)
-  BS8L.writeFile (BS8.unpack filePath) $
+  BS8L.writeFile (FilePath.toString filePath) $
     encodePretty $ reverse $
     runIdentity $ Revisit.run (buildCommandsTargets cwd stats rootTargets)

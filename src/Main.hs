@@ -101,7 +101,7 @@ instance Show BadCommandLine where
     where
       Color.Scheme{..} = Color.scheme
 
-getRequestedTargets :: Printer -> Opts.ExtraOutputs -> [ByteString] -> IO Requested
+getRequestedTargets :: Printer -> Opts.ExtraOutputs -> [FilePath] -> IO Requested
 getRequestedTargets _ _ ["clean"] = return RequestedClean
 getRequestedTargets printer extraOutputs ts
   | "clean" `elem` ts =
@@ -125,18 +125,18 @@ setBuffering = do
 
 switchDirectory :: FilePath -> IO (FilePath, FilePath)
 switchDirectory makefilePath = do
-  origCwd <- Posix.getWorkingDirectory
-  unless (BS8.null cwd) $ do
-    Posix.changeWorkingDirectory cwd
+  origCwd <- FilePath.fromBS <$> Posix.getWorkingDirectory
+  unless (FilePath.null cwd) $ do
+    Posix.changeWorkingDirectory $ FilePath.toBS cwd
     fullCwd <- FilePath.canonicalizePath $ origCwd </> cwd
-    BS8.putStrLn $ "make: Entering directory `" <> fullCwd <> "'"
+    BS8.putStrLn $ "make: Entering directory `" <> FilePath.toBS fullCwd <> "'"
   return (origCwd, file)
   where
     (cwd, file) = FilePath.splitFileName makefilePath
 
 parseMakefile :: Printer -> Db -> FilePath -> FilePath -> Makefile.Vars -> IO Makefile
 parseMakefile printer db origMakefilePath finalMakefilePath vars = do
-  cwd <- Posix.getWorkingDirectory
+  cwd <- FilePath.fromBS <$> Posix.getWorkingDirectory
   let absFinalMakefilePath = cwd </> finalMakefilePath
   (parseTime, (isHit, makefile)) <- timeIt $ do
     (isHit, rawMakefile) <- MemoParseMakefile.memoParse db absFinalMakefilePath vars
@@ -271,7 +271,7 @@ handleRequested
       Buildsome.BuiltTargets rootTargets slaveStats <-
         Buildsome.want printer buildsome reason requestedTargetPaths
       maybe (return ()) (Chart.make slaveStats) mChartPath
-      cwd <- Posix.getWorkingDirectory
+      cwd <- FilePath.fromBS <$> Posix.getWorkingDirectory
       maybe (return ()) (ClangCommands.make cwd slaveStats rootTargets) mClangCommandsPath
       case compatMakefile of
         Opts.NoCompatMakefile -> return ()

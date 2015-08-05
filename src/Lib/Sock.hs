@@ -14,10 +14,10 @@ import Lib.Exception (bracket, bracket_)
 import Lib.FilePath (FilePath)
 import Network.Socket (Socket)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BS8
 import qualified Network.Socket as Sock
 import qualified Network.Socket.ByteString as SockBS
 import qualified System.Posix.ByteString as Posix
+import qualified Lib.FilePath as FilePath
 
 -- May not receive all if EOF encountered
 recvAll :: Socket -> Int -> IO BS.ByteString
@@ -50,6 +50,6 @@ recvLoop_ f sock = go
 withUnixStreamListener :: FilePath -> (Socket -> IO a) -> IO a
 withUnixStreamListener path body =
   bracket (Sock.socket Sock.AF_UNIX Sock.Stream 0) Sock.close $ \sock ->
-  bracket_ (Sock.bind sock (Sock.SockAddrUnix (BS8.unpack path))) (Posix.removeLink path) $ do
+  bracket_ (Sock.bind sock (Sock.SockAddrUnix (FilePath.toString path))) (Posix.removeLink $ FilePath.toBS path) $ do
     Sock.listen sock 5
     body sock

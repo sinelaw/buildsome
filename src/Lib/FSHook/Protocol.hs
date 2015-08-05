@@ -30,6 +30,7 @@ import System.Posix.Files.ByteString (fileAccess)
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.IntMap as M
+import qualified Lib.FilePath as FilePath
 
 data OpenWriteMode = WriteMode | ReadWriteMode
   deriving (Show, Generic)
@@ -147,7 +148,7 @@ mAX_EXEC_FILE :: Int
 mAX_EXEC_FILE = mAX_PATH
 
 getNullTerminated :: Int -> Get FilePath
-getNullTerminated len = truncateAt 0 <$> getByteString len
+getNullTerminated len = (FilePath.fromBS . truncateAt 0) <$> getByteString len
 
 getPath :: Get FilePath
 getPath = getNullTerminated mAX_PATH
@@ -186,17 +187,19 @@ parseOpenW = mkOpen <$> getOutPath <*> getWord32le <*> getWord32le
 
 execP :: FilePath -> FilePath -> FilePath -> FilePath -> IO Func
 execP file cwd envPath confStrPath
-  | "/" `BS8.isInfixOf` file = return $ ExecP (Just file) []
-  | otherwise = search [] allPaths
+  | "/" `BS8.isInfixOf` (FilePath.toBS file) = return $ ExecP (Just file) []
+  | otherwise = search [] $ map FilePath.toBS allPaths
   where
-    split = BS8.split ':'
+    split :: FilePath -> [FilePath]
+    split = map FilePath.fromBS . BS8.split ':' . FilePath.toBS
     allPaths =
       map ((</> file) . (cwd </>)) $ split envPath ++ split confStrPath
-    search attempted [] = return $ ExecP Nothing attempted
+    search :: [ByteString] -> [ByteString] -> IO Func
+    search attempted [] = return $ ExecP Nothing $ map FilePath.fromBS attempted
     search attempted (path:paths) = do
       canExec <- fileAccess path False False True `catchDoesNotExist` return False
       if canExec
-        then return $ ExecP (Just path) attempted
+        then return $ ExecP (Just $ FilePath.fromBS path) $ map FilePath.fromBS attempted
         else search (path:attempted) paths
 
 funcs :: IntMap (String, Get (IO Func))

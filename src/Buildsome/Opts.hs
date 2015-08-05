@@ -19,10 +19,12 @@ import Prelude.Compat hiding (FilePath)
 import Control.Monad (liftM)
 import Data.ByteString (ByteString)
 import Data.List (intercalate)
+import Data.String (IsString(..))
 
 import Lib.FilePath (FilePath)
 import Options.Applicative
 import qualified Data.ByteString.Char8 as BS8
+import qualified Lib.FilePath as FilePath
 
 data OverwriteUnregisteredOutputs = OverwriteUnregisteredOutputs | DontOverwriteUnregisteredOutputs
   deriving (Show)
@@ -115,11 +117,14 @@ data Opt = Opt { optRequestedTargets :: [FilePath]
 data Opts = GetVersion | Opts Opt
   deriving (Show)
 
-optionalBsOpt :: Mod OptionFields String -> Parser (Maybe ByteString)
-optionalBsOpt = optional . bsOpt
-
 bsOpt :: Mod OptionFields String -> Parser ByteString
 bsOpt = fmap BS8.pack . strOption
+
+optionalFilePathOpt :: Mod OptionFields String -> Parser (Maybe FilePath)
+optionalFilePathOpt = optional . filePathOpt
+
+filePathOpt :: Mod OptionFields String -> Parser FilePath
+filePathOpt = fmap fromString . strOption
 
 desc :: String
 desc = intercalate "\n"
@@ -145,6 +150,9 @@ bytestr :: Monad m => String -> m ByteString
 bytestr = liftM BS8.pack . str
 #endif
 
+filepath :: ReadM FilePath
+filepath = FilePath.fromBS <$> bytestr
+
 get :: IO Opts
 get =
   execParser $
@@ -154,11 +162,12 @@ get =
     parser = versionParser <|> (Opts <$> optsParser)
     versionParser = flag' GetVersion $ long "version" <> help "Get buildsome's version"
     optsParser =
-      Opt <$> many (argument bytestr (metavar "targets"))
-          <*> optionalBsOpt (short 'f' <>
-                             long "file" <>
-                             metavar "file" <>
-                             help "Use file as a makefile.")
+      Opt <$> many (argument filepath (metavar "targets"))
+          <*> optionalFilePathOpt
+                (short 'f' <>
+                 long "file" <>
+                 metavar "file" <>
+                 help "Use file as a makefile.")
           <*> opt (short 'j' <>
                    long "parallelism" <>
                    help "How many commands to execute in parallel" <>
@@ -193,13 +202,15 @@ get =
                long "keep-going" <>
                help "Continue as much as possible after an error.")
           <*> ( ExtraOutputs
-                <$> optionalBsOpt (long "charts" <>
-                                   metavar "charts-file" <>
-                                   help "File to write charts to")
+                <$> optionalFilePathOpt
+                      (long "charts" <>
+                       metavar "charts-file" <>
+                       help "File to write charts to")
                 <*> optional
-                    (bsOpt (long "clang-commands" <>
-                            metavar "commands-file" <>
-                            help "Write clang commands spec to given file")
+                    (filePathOpt
+                       (long "clang-commands" <>
+                        metavar "commands-file" <>
+                        help "Write clang commands spec to given file")
                      <|>
                      flag' "compile_commands.json"
                      (short 'C' <>
@@ -209,9 +220,10 @@ get =
                     (short 'M' <> long "compat-makefile" <>
                      help "Generate compatibility Makefile")
               )
-          <*> optionalBsOpt (long "fs-override" <>
-                             metavar "path" <>
-                             help "Path for fs_override.so")
+          <*> optionalFilePathOpt
+                (long "fs-override" <>
+                 metavar "path" <>
+                 help "Path for fs_override.so")
           <*> many (bsOpt (metavar "flag" <> long "with" <>
                            help "Enable flags that are disabled by default"))
           <*> many (bsOpt (metavar "flag" <> long "without" <>

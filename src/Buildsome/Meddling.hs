@@ -11,7 +11,7 @@ import Data.Typeable (Typeable)
 import Lib.FileDesc (fileStatDescOfStat)
 import Lib.FilePath (FilePath)
 import qualified Control.Exception as E
-import qualified Lib.Directory as Dir
+
 import qualified System.Posix.ByteString as Posix
 
 data ThirdPartyMeddlingError = ThirdPartyMeddlingError FilePath String deriving (Show, Typeable)

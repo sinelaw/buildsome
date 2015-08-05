@@ -11,6 +11,7 @@ import Data.ByteString (ByteString)
 import Data.Map (Map)
 import Data.Monoid ((<>))
 import Lib.FilePath (FilePath)
+import qualified Lib.FilePath as FilePath
 import qualified Buildsome.BuildMaps as BuildMaps
 import qualified Buildsome.Stats as Stats
 import qualified Data.ByteString.Char8 as BS8
@@ -85,7 +86,7 @@ statsGraph :: Stats -> Graph
 statsGraph =
   Graph .
   M.map toNode .
-  M.mapKeys BuildMaps.targetRepPath .
+  M.mapKeys (FilePath.toBS . BuildMaps.targetRepPath) .
   M.filter hasDeps .
   Stats.ofTarget
   where
@@ -95,12 +96,12 @@ statsGraph =
       { nodeDests = map targetAsByteString $ Stats.tsDirectDeps targetStats
       , nodeFontSize = 20 + 5 * realToFrac (Stats.tsTime targetStats)
       }
-    targetAsByteString = BuildMaps.targetRepPath . BuildMaps.computeTargetRep
+    targetAsByteString = FilePath.toBS . BuildMaps.targetRepPath . BuildMaps.computeTargetRep
 
 makeDotChart :: Stats -> FilePath -> IO ()
 makeDotChart stats filePath = do
   putStrLn $ "Writing dot file to " ++ show filePath
-  BS8.writeFile (BS8.unpack filePath) $ dotRenderGraph "Dependencies" $ statsGraph stats
+  BS8.writeFile (FilePath.toString filePath) $ dotRenderGraph "Dependencies" $ statsGraph stats
 
 make :: Stats -> FilePath -> IO ()
 make stats filePathBase = do

@@ -163,19 +163,19 @@ updateGitIgnore buildsome makefilePath = do
       extraIgnored = [buildDbFilename makefilePath, ".gitignore"]
   verbosePutLn buildsome IO.stdout "Updating .gitignore"
   base <- Dir.catchDoesNotExist
-          (fmap BS8.lines $ BS8.readFile $  BS8.unpack gitIgnoreBasePath)
+          (fmap BS8.lines $ BS8.readFile $  FilePath.toString gitIgnoreBasePath)
           $ return []
   let
     generatedPaths =
       map (("/" <>) . FilePath.makeRelative dir) $
         extraIgnored ++ S.toList (outputs <> leaked)
-  BS8.writeFile (BS8.unpack gitIgnorePath) $ BS8.unlines $
-    header ++ generatedPaths ++ base
+  BS8.writeFile (FilePath.toString gitIgnorePath) $ BS8.unlines $
+    header ++ map FilePath.toBS generatedPaths ++ base
   where
-    gitignoreBaseName = ".gitignore-base"
+    gitignoreBaseName = ".gitignore-base" :: FilePath
     header = ["# AUTO GENERATED FILE - DO NOT EDIT",
               BS8.concat
-             ["# If you need to ignore files not managed by buildsome, add to ", gitignoreBaseName]]
+             ["# If you need to ignore files not managed by buildsome, add to ", FilePath.toBS gitignoreBaseName]]
 
 data BuildTargetEnv = BuildTargetEnv
   { bteBuildsome :: Buildsome

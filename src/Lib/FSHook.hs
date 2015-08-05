@@ -170,7 +170,7 @@ with :: Printer -> FilePath -> (FSHook -> IO a) -> IO a
 with printer ldPreloadPath body = do
   pid <- Posix.getProcessID
   freshJobIds <- Fresh.new 0
-  let serverFilename = "/tmp/fshook-" <> BS8.pack (show pid)
+  let serverFilename = "/tmp/fshook-" <> fromString (show pid)
   withUnixStreamListener serverFilename $ \listener -> do
     runningJobsRef <- newIORef M.empty
     let
@@ -305,13 +305,12 @@ handleJobConnection tidStr conn job _need = do
 
 mkEnvVars :: FSHook -> FilePath -> JobId -> Process.Env
 mkEnvVars fsHook rootFilter jobId =
-  (map . fmap) BS8.unpack
-  [ ("LD_PRELOAD", fsHookLdPreloadPath fsHook)
+  [ ("LD_PRELOAD", FilePath.toString $ fsHookLdPreloadPath fsHook)
   , ("DYLD_FORCE_FLAT_NAMESPACE", "1")
-  , ("DYLD_INSERT_LIBRARIES", fsHookLdPreloadPath fsHook)
-  , ("BUILDSOME_MASTER_UNIX_SOCKADDR", fsHookServerAddress fsHook)
-  , ("BUILDSOME_JOB_ID", jobId)
-  , ("BUILDSOME_ROOT_FILTER", rootFilter)
+  , ("DYLD_INSERT_LIBRARIES", FilePath.toString $ fsHookLdPreloadPath fsHook)
+  , ("BUILDSOME_MASTER_UNIX_SOCKADDR", FilePath.toString $ fsHookServerAddress fsHook)
+  , ("BUILDSOME_JOB_ID", BS8.unpack jobId)
+  , ("BUILDSOME_ROOT_FILTER", FilePath.toString $ rootFilter)
   ]
 
 timedRunCommand ::
@@ -400,12 +399,12 @@ getLdPreloadPath (Just path) = do
   assertLdPreloadPathExists ldPreloadPath
   return ldPreloadPath
 getLdPreloadPath Nothing = do
-  installedFilePath <- BS8.pack <$> (getDataFileName . BS8.unpack) fileName
+  installedFilePath <- fromString <$> (getDataFileName . FilePath.toString) fileName
   installedExists <- FilePath.exists installedFilePath
   if installedExists
     then return installedFilePath
     else do
-      argv0 <- getArgv0
+      argv0 <- FilePath.fromBS <$> getArgv0
       let nearExecPath = takeDirectory argv0 </> fileName
       assertLdPreloadPathExists nearExecPath
       return nearExecPath

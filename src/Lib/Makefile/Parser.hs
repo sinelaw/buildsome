@@ -17,6 +17,7 @@ import Data.Map (Map)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Monoid ((<>))
 import Data.Set (Set)
+import Data.String (IsString(..))
 import Data.Typeable (Typeable)
 import Lib.ByteString (unprefixed)
 import Lib.Cartesian (cartesian)
@@ -139,7 +140,7 @@ RELEASE_INLINE(filepaths)
 filepaths :: Monad m => Parser m [FilePath]
 filepaths = do
   pos <- P.getPosition
-  BS8.words . cartesian pos <$> interpolateVariables unescapedSequence ":#|\n"
+  map FilePath.fromBS . BS8.words . cartesian pos <$> interpolateVariables unescapedSequence ":#|\n"
 
 RELEASE_INLINE(filepaths1)
 filepaths1 :: Monad m => Parser m [FilePath]
@@ -195,8 +196,9 @@ metaVarId outputPaths inputPaths ooInputPaths mStem =
     getFirst err paths = fromMaybe (error err) $ listToMaybe paths
     firstOutput toString = toString $ getFirst "No first output for @ variable" outputPaths
     firstInput  toString = toString $ getFirst "No first input for < variable"  inputPaths
-    allInputs   toString = BS8.unwords $ map toString inputPaths
-    allOOInputs toString = BS8.unwords $ map toString ooInputPaths
+    allInputs   toString = unwords' $ map toString inputPaths
+    allOOInputs toString = unwords' $ map toString ooInputPaths
+    unwords' = FilePath.fromBS . BS8.unwords . map FilePath.toBS
 
 RELEASE_INLINE(metaVarModifier)
 metaVarModifier :: Monad m => ParserG u m (FilePath -> FilePath)
@@ -209,7 +211,7 @@ metaVarModifier =
 RELEASE_INLINE(metaVariable)
 metaVariable ::
   Monad m => [FilePath] -> [FilePath] -> [FilePath] ->
-  Maybe ByteString -> ParserG u m ByteString
+  Maybe FilePath -> ParserG u m FilePath
 metaVariable outputPaths inputPaths ooInputPaths mStem =
   P.choice
   [ P.char '(' *> (vid <*> metaVarModifier) <* P.char ')'
@@ -289,7 +291,7 @@ includeLine = do
     horizSpaces *> interpolateVariables unescapedSequence " #\n" <* skipLineSuffix
   case reads (BS8.unpack fileNameStr) of
     [(path, "")] -> return path
-    _ -> return fileNameStr
+    _ -> return $ FilePath.fromBS fileNameStr
 
 RELEASE_INLINE(runInclude)
 runInclude :: MonadMakefileParser m => IncludePath -> Parser m ()
@@ -300,17 +302,17 @@ runInclude rawIncludedPath = do
     Left e@E.SomeException {} -> fail $ "Failed to read include file: " ++ show e
     Right fileContent ->
       void $ P.updateParserState $ \(Prim.State input pos state) ->
-        Prim.State fileContent (Pos.initialPos (BS8.unpack includedPath)) $
+        Prim.State fileContent (Pos.initialPos (FilePath.toString includedPath)) $
         atStateIncludeStack ((pos, input) :) state
   where
     computeIncludePath =
-      case unprefixed "/" rawIncludedPath of
+      case unprefixed "/" $ FilePath.toBS rawIncludedPath of
       Nothing -> do
-        curPath <- FilePath.takeDirectory . BS8.pack . P.sourceName <$> P.getPosition
+        curPath <- FilePath.takeDirectory . fromString . P.sourceName <$> P.getPosition
         return $ curPath </> rawIncludedPath
       Just pathSuffix -> do
         state <- P.getState
-        return $ stateRootDir state </> pathSuffix
+        return $ stateRootDir state </> (FilePath.fromBS pathSuffix)
 
 RELEASE_INLINE(returnToIncluder)
 returnToIncluder :: Monad m => Parser m ()
@@ -372,9 +374,9 @@ cmdLine =
 
 mkFilePattern :: FilePath -> Maybe FilePattern
 mkFilePattern path
-  | "%" `BS8.isInfixOf` dir =
+  | "%" `BS8.isInfixOf` (FilePath.toBS dir) =
     error $ "Directory component may not be a pattern: " ++ show path
-  | otherwise = FilePattern dir <$> StringPattern.fromString file
+  | otherwise = FilePattern dir <$> StringPattern.fromString (FilePath.toBS file)
   where
     (dir, file) = FilePath.splitFileName path
 
@@ -413,7 +415,7 @@ interpolateCmds mStem tgt@(Target outputs inputs ooInputs cmds pos) =
       ) () ""
     cmdInterpolate =
       interpolateString escapeSequence "#\n"
-      (metaVariable outputs inputs ooInputs mStem)
+      (FilePath.toBS <$> (metaVariable outputs inputs ooInputs $ FilePath.fromBS <$> mStem))
       <* skipLineSuffix
 
 RELEASE_INLINE(targetSimple)
@@ -446,7 +448,7 @@ target = do
     P.try (horizSpaces *> P.char '|') *> horizSpaces *> filepaths
   skipLineSuffix
   let targetParser
-        | "%" `BS8.isInfixOf` (BS8.concat . concat) [outputPaths, inputPaths, orderOnlyInputs] =
+        | "%" `BS8.isInfixOf` (BS8.concat . concat) (map (map FilePath.toBS) [outputPaths, inputPaths, orderOnlyInputs]) =
           targetPattern
         | otherwise = targetSimple
   targetParser pos outputPaths inputPaths orderOnlyInputs
@@ -615,7 +617,7 @@ parse :: MonadMakefileParser m => FilePath -> Vars -> m Makefile
 parse absMakefilePath vars =
   rethrow showErr $ join $ do
     input <- rethrow show $ MakefileMonad.tryReadFile absMakefilePath
-    return $ P.runParserT makefile initialState (BS8.unpack absMakefilePath) input
+    return $ P.runParserT makefile initialState (FilePath.toString absMakefilePath) input
   where
     initialState =
       State

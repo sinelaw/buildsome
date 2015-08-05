@@ -12,9 +12,10 @@ import Lib.FilePath ((</>), FilePath, splitFileName)
 import Lib.Makefile.Parser (interpolateCmds)
 import Lib.Makefile.Types
 import qualified Lib.StringPattern as StringPattern
+import qualified Lib.FilePath as FilePath
 
 plugFilePattern :: StringPattern.Match -> FilePattern -> Maybe FilePath
-plugFilePattern match (FilePattern dir file) = (dir </>) <$> StringPattern.plug match file
+plugFilePattern match (FilePattern dir file) = ((dir </>) . FilePath.fromBS) <$> StringPattern.plug match file
 
 instantiatePatternByMatch :: StringPattern.Match -> Pattern -> Maybe Target
 instantiatePatternByMatch match (Target outputs inputs ooInputs cmds pos) =
@@ -41,5 +42,5 @@ instantiatePatternByOutput outputPath target =
     (outputDir, outputFile) = splitFileName outputPath
     tryMatchOutput (FilePattern patDir patFile) = do
       guard (patDir == outputDir)
-      outputMatch <- StringPattern.match patFile outputFile
+      outputMatch <- StringPattern.match patFile (FilePath.toBS outputFile)
       instantiatePatternByMatch outputMatch target

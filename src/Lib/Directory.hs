@@ -48,17 +48,17 @@ getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
 getMFileStatus path = do
   doesExist <- FilePath.exists path
   if doesExist
-    then (Just <$> Posix.getFileStatus path) `catchDoesNotExist` return Nothing
+    then (Just <$> Posix.getFileStatus (FilePath.toBS path)) `catchDoesNotExist` return Nothing
     else return Nothing
 
 createDirectories :: FilePath -> IO ()
 createDirectories path
-  | BS8.null path = return ()
+  | FilePath.null path = return ()
   | otherwise = do
     doesExist <- FilePath.exists path
     unless doesExist $ do
       createDirectories $ FilePath.takeDirectory path
-      Posix.createDirectory path 0o777
+      Posix.createDirectory (FilePath.toBS path) 0o777
 
 removeFileByStat :: IO () -> FilePath -> IO ()
 removeFileByStat notExist path = do
@@ -66,9 +66,9 @@ removeFileByStat notExist path = do
   case mFileStat of
     Nothing -> notExist
     Just fileStat
-      | Posix.isRegularFile  fileStat -> Posix.removeLink path
-      | Posix.isSymbolicLink fileStat -> Posix.removeLink path
-      | Posix.isDirectory    fileStat -> Dir.removeDirectoryRecursive $ BS8.unpack path
+      | Posix.isRegularFile  fileStat -> Posix.removeLink $ FilePath.toBS path
+      | Posix.isSymbolicLink fileStat -> Posix.removeLink $ FilePath.toBS path
+      | Posix.isDirectory    fileStat -> Dir.removeDirectoryRecursive $ FilePath.toString path
       | otherwise -> error $ "removeFileOrDirectoryOrNothing: unsupported filestat " ++ show path
 
 removeFileOrDirectoryOrNothing :: FilePath -> IO ()
@@ -79,17 +79,17 @@ removeFileOrDirectory path =
   removeFileByStat
   -- Try to remove the file when it doesn't exist in order to generate
   -- the meaningful IO exception:
-  (Posix.removeLink path) path
+  (Posix.removeLink $ FilePath.toBS path) path
 
 getDirectoryContents :: FilePath -> IO [FilePath]
 getDirectoryContents path =
-  bracket (Posix.openDirStream path) Posix.closeDirStream go
+  bracket (Posix.openDirStream $ FilePath.toBS path) Posix.closeDirStream go
   where
     go dirStream = do
       fn <- Posix.readDirStream dirStream
       if BS8.null fn
         then return []
-        else (fn :) <$> go dirStream
+        else (FilePath.fromBS fn :) <$> go dirStream
 
 makeAbsolutePath :: FilePath -> IO FilePath
-makeAbsolutePath path = (</> path) <$> Posix.getWorkingDirectory
+makeAbsolutePath path = (</> path) . FilePath.fromBS <$> Posix.getWorkingDirectory

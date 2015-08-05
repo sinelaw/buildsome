@@ -5,6 +5,7 @@ import Prelude.Compat hiding (FilePath)
 
 import Data.ByteString (ByteString)
 import Lib.FilePath (FilePath)
+import qualified Lib.FilePath as FilePath
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as BS8
 import qualified System.IO as IO
@@ -17,4 +18,4 @@ class Monad m => MonadMakefileParser m where
 instance MonadMakefileParser IO where
   outPutStrLn = BS8.putStrLn
   errPutStrLn = BS8.hPutStrLn IO.stderr
-  tryReadFile = E.try . BS8.readFile . BS8.unpack
+  tryReadFile = E.try . BS8.readFile . FilePath.toString
