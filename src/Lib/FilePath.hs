@@ -71,7 +71,14 @@ instance Show FilePath where
   show = show . toString
 
 instance Ord FilePath where
-  x `compare` y = (toString x) `compare` (toString y)
+  x `compare` y =
+    case compareRes of
+      EQ ->  (fpLength x) `compare` (fpLength y)
+      r -> r
+    where minLen = min (fpLength x) (fpLength y)
+          compareAt i = (unsafeIndex x i) `compare` (unsafeIndex y i)
+          compareRes = foldr (\i p -> compareAt i <> p) EQ [0 .. minLen]
+
 
 instance NFData FilePath where
   rnf (FilePath A.Array{..}) = C# i `seq` ()
