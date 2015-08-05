@@ -14,7 +14,7 @@ import qualified System.Posix.ByteString as Posix
 
 scanFileUpwards :: FilePath -> IO (Maybe FilePath)
 scanFileUpwards name = do
-  cwd <- Posix.getWorkingDirectory
+  cwd <- FilePath.fromBS <$> Posix.getWorkingDirectory
   let
     -- NOTE: Excludes root (which is probably fine)
     parents = takeWhile (/= "/") $ iterate FilePath.takeDirectory cwd

@@ -27,6 +27,7 @@ import Lib.FilePath (FilePath)
 import Lib.Posix.FileType (FileType, fileTypeOfStat)
 import Lib.Posix.Instances ()
 import Lib.TimeInstances ()
+import qualified Lib.FilePath as FilePath
 import qualified Control.Exception as E
 import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
@@ -111,7 +112,7 @@ instance Cmp FileStatDesc where
   FileStatDirectory _ `cmp` FileStatOther _ = Cmp.NotEquals ["Directory vs. Non-directory"]
 
 instance Binary Posix.CMode where
-  get = Posix.CMode <$> get
+  get = {-# CMode_get #-} (Posix.CMode <$> get)
   put (Posix.CMode x) = put x
 
 data UnsupportedFileTypeError = UnsupportedFileTypeError FilePath deriving (Show, Typeable)
@@ -151,9 +152,9 @@ fileModeDescOfStat = FileModeDesc . Posix.fileMode
 fileContentDescOfStat :: FilePath -> Posix.FileStatus -> IO FileContentDesc
 fileContentDescOfStat path stat
   | Posix.isRegularFile stat =
-    FileContentDescRegular . MD5.hash <$> BS8.readFile (BS8.unpack path)
+    FileContentDescRegular . MD5.hash <$> BS8.readFile (FilePath.toString path)
   | Posix.isDirectory stat =
-    FileContentDescDir . MD5.hash . BS8.unlines <$> Dir.getDirectoryContents path
+    FileContentDescDir . MD5.hash . BS8.unlines . map FilePath.toBS <$> Dir.getDirectoryContents path
   | Posix.isSymbolicLink stat =
-    FileContentDescSymlink <$> Posix.readSymbolicLink path
+    FileContentDescSymlink . FilePath.fromBS <$> Posix.readSymbolicLink (FilePath.toBS path)
   | otherwise = E.throwIO $ UnsupportedFileTypeError path

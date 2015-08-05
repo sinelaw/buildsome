@@ -40,10 +40,11 @@ import qualified Crypto.Hash.MD5 as MD5
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Set as S
 import qualified Database.LevelDB.Base as LevelDB
+import qualified Lib.FilePath as FilePath
 import qualified Lib.Makefile as Makefile
 import qualified System.Posix.ByteString as Posix
 
-schemaVersion :: ByteString
+schemaVersion :: FilePath
 schemaVersion = "schema.ver.17"
 
 data Db = Db
@@ -113,7 +114,7 @@ options =
 
 withLevelDb :: FilePath -> (LevelDB.DB -> IO a) -> IO a
 withLevelDb dbPath =
-  LevelDB.withDB (BS8.unpack (dbPath </> schemaVersion)) options
+  LevelDB.withDB (FilePath.toString (dbPath </> schemaVersion)) options
 
 with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
@@ -127,11 +128,11 @@ with rawDbPath body = do
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
     writeBack path ref = do
-      BS8.writeFile (BS8.unpack (path <.> "tmp")) .
-        BS8.unlines . S.toList =<< readIORef ref
-      Posix.rename (path <.> "tmp") path
+      BS8.writeFile (FilePath.toString (path <.> "tmp")) .
+        BS8.unlines . map FilePath.toBS . S.toList =<< readIORef ref
+      Posix.rename (FilePath.toBS $ path <.> "tmp") (FilePath.toBS path)
     decodeFileOrEmpty path =
-      (S.fromList . BS8.lines <$> BS8.readFile (BS8.unpack path))
+      (S.fromList . map FilePath.fromBS . BS8.lines <$> BS8.readFile (FilePath.toString path))
       `catchDoesNotExist` return S.empty
 
 data IRef a = IRef
@@ -153,7 +154,7 @@ executionLog target = mkIRefKey targetKey
     targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
-fileContentDescCache = mkIRefKey
+fileContentDescCache = mkIRefKey . FilePath.toBS
 
 type MFileContentDesc = FileDesc () FileContentDesc
 

@@ -11,7 +11,6 @@ import Buildsome.Stats (Stats)
 
 import Control.Monad (filterM)
 import Control.Monad.Trans.Class (MonadTrans(..))
-import Data.ByteString (ByteString)
 import Data.Maybe (fromMaybe)
 import Data.Monoid ((<>))
 import Data.Set (Set)
@@ -25,6 +24,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Lib.Directory as Directory
 import qualified Lib.Revisit as Revisit
+import qualified Lib.FilePath as FilePath
 import qualified System.Posix.ByteString as Posix
 
 isDir :: FilePath -> IO Bool
@@ -50,15 +50,22 @@ makefileTarget target = do
   where
     repPath = BuildMaps.targetRepPath $ BuildMaps.computeTargetRep target
 
-targetCmdLines :: MakefileTarget -> Target -> [ByteString]
+makefileTargetDirsBS :: MakefileTarget -> [BS8.ByteString]
+makefileTargetDirsBS = map FilePath.toBS . makefileTargetDirs
+
+makefileTargetPathBS :: MakefileTarget -> BS8.ByteString
+makefileTargetPathBS = FilePath.toBS . makefileTargetPath
+
+targetCmdLines :: MakefileTarget -> TargetType output input -> [BS8.ByteString]
 targetCmdLines tgt target =
-  ["rm -rf " <> dir | dir <- makefileTargetDirs tgt] ++
+  ["rm -rf " <> dir | dir <- makefileTargetDirsBS tgt] ++
+--  (BS8.lines . targetCmds) target ++
   (BS8.lines . targetCmds) target ++
-  ["touch " <> makefileTargetPath tgt | isDirectory tgt]
+  ["touch " <> makefileTargetPathBS tgt | isDirectory tgt]
 
 type Phonies = Set FilePath
 
-onOneTarget :: Phonies -> FilePath -> Stats -> Target -> M [ByteString]
+onOneTarget :: Set BS8.ByteString -> FilePath -> Stats -> Target -> M [BS8.ByteString]
 onOneTarget phoniesSet cwd stats target =
   fmap (fromMaybe []) $
   Revisit.avoid targetRep $ do
@@ -67,13 +74,13 @@ onOneTarget phoniesSet cwd stats target =
     depTgts <- lift $ mapM makefileTarget directDeps
     let
       targetDecl = mconcat
-        [ "T := ", makefileTargetPath tgt, "\n$(T):"
-        , spaceUnwords $ map makefileTargetPath depTgts
+        [ "T := ", makefileTargetPathBS tgt, "\n$(T):"
+        , spaceUnwords $ map makefileTargetPathBS depTgts
         ]
       myLines =
         [ "#" <> BS8.pack (showPos (targetPos target)) ] ++
-        [ ".PHONY: " <> makefileTargetPath tgt
-        | makefileTargetPath tgt `Set.member` phoniesSet
+        [ ".PHONY: " <> makefileTargetPathBS tgt
+        | makefileTargetPathBS tgt `Set.member` phoniesSet
         ] ++
         [ targetDecl ] ++
         map ("\t" <>) (targetCmdLines tgt target) ++
@@ -88,14 +95,14 @@ onOneTarget phoniesSet cwd stats target =
       Map.lookup targetRep (Stats.ofTarget stats)
     depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
 
-onMultipleTargets :: Phonies -> FilePath -> Stats -> [Target] -> M [ByteString]
+onMultipleTargets :: Set BS8.ByteString -> FilePath -> Stats -> [Target] -> M [BS8.ByteString]
 onMultipleTargets phoniesSet cwd stats = fmap concat . mapM (onOneTarget phoniesSet cwd stats)
 
 make :: Phonies -> FilePath -> Stats -> [Target] -> FilePath -> IO ()
 make phoniesSet cwd stats rootTargets filePath = do
   putStrLn $ "Writing compat makefile to: " ++ show (cwd </> filePath)
-  makefileLines <- Revisit.run (onMultipleTargets phoniesSet cwd stats rootTargets)
-  BS8.writeFile (BS8.unpack filePath) $
+  makefileLines <- Revisit.run (onMultipleTargets (Set.map FilePath.toBS phoniesSet) cwd stats rootTargets)
+  BS8.writeFile (FilePath.toString filePath) $
     BS8.unlines $
     [ "# Auto-generated compatibility mode Makefile"
     , "# THIS MAKEFILE IS INVALID AS SOON AS ANY CHANGE OCCURS ANYWHERE"
