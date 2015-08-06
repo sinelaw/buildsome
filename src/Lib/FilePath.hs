@@ -101,9 +101,7 @@ instance NFData FilePath where
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
-  get = do
-      str <- go []
-      return $ fromString str
+  get = fromString . reverse <$> go []
     where go s = do
             c <- get :: Get Char
             if ord c == 0
