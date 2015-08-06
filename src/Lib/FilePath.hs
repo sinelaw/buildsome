@@ -22,7 +22,7 @@ import Control.Exception (catch, throwIO)
 import Data.ByteString.Char8 (ByteString)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
-import Data.Binary (Binary(..), Get)
+import Data.Binary (Binary(..), Get, encode, decode)
 import GHC.Read (Read(..))
 import GHC.IO.Exception (IOErrorType(..))
 import Lib.ByteString (unprefixed)
@@ -38,6 +38,7 @@ import Control.DeepSeq (NFData(..))
 import Data.Char (ord, chr)
 import Data.IORef (newIORef, IORef)
 import System.IO.Unsafe (unsafePerformIO)
+import qualified Data.ByteString.Lazy as LazyBS
 
 data FilePath = FilePath (IORef (), Integer) A.Array --Posix.RawFilePath
 
@@ -141,10 +142,10 @@ toString :: FilePath -> [Char]
 toString fp = map (unsafeIndex fp) [0..fpLength fp - 1]
 
 toBS :: FilePath -> ByteString
-toBS = BS8.pack . toString
+toBS = LazyBS.toStrict . encode
 
 fromBS :: ByteString -> FilePath
-fromBS = fromString . BS8.unpack
+fromBS = decode . LazyBS.fromStrict
 
 {-# INLINE exists #-}
 exists :: FilePath -> IO Bool
