@@ -22,7 +22,7 @@ import Control.Exception (catch, throwIO)
 import Data.ByteString.Char8 (ByteString)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
-import Data.Binary (Binary(..), Get)
+import Data.Binary (Binary(..), Get, Put)
 import GHC.Read (Read(..))
 import GHC.IO.Exception (IOErrorType(..))
 import Lib.ByteString (unprefixed)
@@ -117,26 +117,34 @@ instance NFData FilePath where
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
-  get = do
-    len <- (get :: Get Int)
-    let go 0 = return []
-        go n = do
-          c <- get :: Get Char
-          (c :) <$> go (n - 1)
-    chars <- go len
-    return $ FilePath $ A.run $ do
-      ar <- new len
-      unsafeWriteChars ar 0 chars
-      return ar
+  get = decodeFP
 
-  put x = do
-    put (fpLength x :: Int)
-    let go n
-          | n == (fpLength x) = return ()
-          | otherwise = do
-              put $ unsafeIndex x n
-              go (n + 1)
-    go 0
+  put x = encodeFP x
+
+{-# INLINE encodeFP #-}
+encodeFP :: FilePath -> Put
+encodeFP x = do
+  put (fpLength x :: Int)
+  let go n
+        | n == (fpLength x) = return ()
+        | otherwise = do
+            put $ unsafeIndex x n
+            go (n + 1)
+  go 0
+
+{-# INLINE decodeFP #-}
+decodeFP :: Get FilePath
+decodeFP = do
+  len <- (get :: Get Int)
+  let go 0 = return []
+      go n = do
+        c <- get :: Get Char
+        (c :) <$> go (n - 1)
+  chars <- go len
+  return $ FilePath $ A.run $ do
+    ar <- new len
+    unsafeWriteChars ar 0 chars
+    return ar
 
 instance Read FilePath where
   readPrec = fromString <$> readPrec
@@ -165,9 +173,11 @@ isLast fp c = fpLast fp == Just c
 toString :: FilePath -> [Char]
 toString fp = map (unsafeIndex fp) [0..fpLength fp - 1]
 
+{-# INLINE toBS #-}
 toBS :: FilePath -> ByteString
 toBS = BS8.pack . toString
 
+{-# INLINE fromBS #-}
 fromBS :: ByteString -> FilePath
 fromBS = fromString . BS8.unpack
 
