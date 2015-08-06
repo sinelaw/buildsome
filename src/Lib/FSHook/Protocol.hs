@@ -18,6 +18,7 @@ import Control.Monad
 import Data.Binary.Get
 import Data.Bits
 import Data.ByteString (ByteString)
+import qualified Data.ByteString.Short as ShortBS (ShortByteString, toShort, fromShort)
 import Data.IntMap (IntMap, (!))
 import Data.Word
 import Lib.ByteString (truncateAt)
@@ -36,7 +37,7 @@ showOpenWriteMode WriteMode = ""
 showOpenWriteMode ReadWriteMode = "+"
 {-# INLINE showOpenWriteMode #-}
 
-data CreationMode = NoCreate | Create Word32 -- Unix permissions
+data CreationMode = NoCreate | Create !Word32 -- Unix permissions
   deriving (Show)
 showCreationMode :: CreationMode -> String
 showCreationMode NoCreate = ""
@@ -49,7 +50,7 @@ showOpenTruncateMode :: OpenTruncateMode -> String
 showOpenTruncateMode OpenNoTruncate = ""
 showOpenTruncateMode OpenTruncate = " (TRUNCATE)"
 
-type InFilePath = FilePath
+type InFilePath = ShortBS.ShortByteString
 
 -- WARNING: The order of these constructors must match
 -- fs_override.c:enum out_effect (due to Enum instance)!
@@ -62,32 +63,32 @@ data OutEffect
   deriving (Eq, Ord, Show, Enum)
 
 data OutFilePath = OutFilePath
-  { outPath :: FilePath
+  { outPath :: ShortBS.ShortByteString
   , outEffect :: OutEffect
   } deriving (Eq, Ord, Show)
 
 data Func
-  = OpenR InFilePath
-  | OpenW OutFilePath OpenWriteMode CreationMode OpenTruncateMode
-  | Stat InFilePath
-  | LStat InFilePath
-  | Creat OutFilePath Word32
-  | Rename OutFilePath OutFilePath
-  | Unlink OutFilePath
-  | Access InFilePath Word32{- TODO: replace Int with AccessMode -}
-  | OpenDir InFilePath
-  | Truncate OutFilePath Word64{- length -}
-  | Chmod OutFilePath Word32{-mode-}
-  | ReadLink InFilePath
-  | MkNod OutFilePath Word32{-mode-} Word64{-dev-}
-  | MkDir OutFilePath Word32{-mode-}
-  | RmDir OutFilePath
-  | SymLink InFilePath OutFilePath
-  | Link OutFilePath OutFilePath
-  | Chown OutFilePath Word32 Word32
-  | Exec InFilePath
-  | ExecP (Maybe FilePath) [FilePath]{-prior searched paths (that did not exist)-}
-  | RealPath InFilePath
+  = OpenR {-# UNPACK #-} !InFilePath
+  | OpenW {-# UNPACK #-} !OutFilePath !OpenWriteMode !CreationMode !OpenTruncateMode
+  | Stat {-# UNPACK #-} !InFilePath
+  | LStat {-# UNPACK #-} !InFilePath
+  | Creat {-# UNPACK #-} !OutFilePath !Word32
+  | Rename {-# UNPACK #-} !OutFilePath !OutFilePath
+  | Unlink {-# UNPACK #-} !OutFilePath
+  | Access {-# UNPACK #-} !InFilePath !Word32{- TODO: replace Int with AccessMode -}
+  | OpenDir {-# UNPACK #-} !InFilePath
+  | Truncate {-# UNPACK #-} !OutFilePath !Word64{- length -}
+  | Chmod {-# UNPACK #-} !OutFilePath !Word32{-mode-}
+  | ReadLink {-# UNPACK #-} !InFilePath
+  | MkNod {-# UNPACK #-} !OutFilePath !Word32{-mode-} !Word64{-dev-}
+  | MkDir {-# UNPACK #-} !OutFilePath !Word32{-mode-}
+  | RmDir {-# UNPACK #-} !OutFilePath
+  | SymLink {-# UNPACK #-} !InFilePath !OutFilePath
+  | Link {-# UNPACK #-} !OutFilePath !OutFilePath
+  | Chown {-# UNPACK #-} !OutFilePath Word32 !Word32
+  | Exec {-# UNPACK #-} !InFilePath
+  | ExecP {-# UNPACK #-} !(Maybe ShortBS.ShortByteString) ![ShortBS.ShortByteString]{-prior searched paths (that did not exist)-}
+  | RealPath {-# UNPACK #-} !InFilePath
   deriving (Show)
 
 -- Hook is delayed waiting for handler to complete
@@ -135,10 +136,10 @@ mAX_PATH_CONF_STR = 10*1024
 mAX_EXEC_FILE :: Int
 mAX_EXEC_FILE = mAX_PATH
 
-getNullTerminated :: Int -> Get FilePath
-getNullTerminated len = truncateAt 0 <$> getByteString len
+getNullTerminated :: Int -> Get ShortBS.ShortByteString
+getNullTerminated len = ShortBS.toShort . truncateAt 0 <$> getByteString len
 
-getPath :: Get FilePath
+getPath :: Get ShortBS.ShortByteString
 getPath = getNullTerminated mAX_PATH
 
 getInPath :: Get InFilePath
@@ -173,19 +174,23 @@ parseOpenW = mkOpen <$> getOutPath <*> getWord32le <*> getWord32le
       | 0 /= flags .&. fLAG_TRUNCATE = OpenTruncate
       | otherwise = OpenNoTruncate
 
-execP :: FilePath -> FilePath -> FilePath -> FilePath -> IO Func
-execP file cwd envPath confStrPath
-  | "/" `BS8.isInfixOf` file = return $ ExecP (Just file) []
+execP :: ShortBS.ShortByteString -> ShortBS.ShortByteString -> ShortBS.ShortByteString -> ShortBS.ShortByteString -> IO Func
+execP file cwd envPath confStrPath = execPBS (s file) (s cwd) (s envPath) (s confStrPath)
+  where s = ShortBS.fromShort
+
+execPBS :: FilePath -> FilePath -> FilePath -> FilePath -> IO Func
+execPBS file cwd envPath confStrPath
+  | "/" `BS8.isInfixOf` file = return $ ExecP (Just $ ShortBS.toShort file) []
   | otherwise = search [] allPaths
   where
     split = BS8.split ':'
     allPaths =
       map ((</> file) . (cwd </>)) $ split envPath ++ split confStrPath
-    search attempted [] = return $ ExecP Nothing attempted
+    search attempted [] = return $ ExecP Nothing $ map ShortBS.toShort attempted
     search attempted (path:paths) = do
       canExec <- fileAccess path False False True `catchDoesNotExist` return False
       if canExec
-        then return $ ExecP (Just path) attempted
+        then return $ ExecP (Just $ ShortBS.toShort path) (map ShortBS.toShort attempted)
         else search (path:attempted) paths
 
 funcs :: IntMap (String, Get (IO Func))
