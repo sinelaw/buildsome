@@ -72,7 +72,14 @@ instance Show FilePath where
   show = show . toString
 
 instance Eq FilePath where
-  x == y = EQ == (x `compare` y)
+  x == y
+    | (fpLength x /= fpLength y) = False
+    | fpLength x == 0 = True
+    -- A.equal expects 2-byte chars
+    | fpLength x == 1 = (fpLast x == fpLast y)
+    | fpLength x `mod` 2 == 0 = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
+    | otherwise = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
+                  && (fpLast x == fpLast y)
 
 instance Ord FilePath where
   -- {-# INLINE compare #-}
