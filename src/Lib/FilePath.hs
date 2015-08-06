@@ -35,7 +35,6 @@ import GHC.Base (Char(..), Int(..), writeCharArray#, indexCharArray#, newByteArr
 import Data.String (IsString(..))
 import GHC.ST (ST(..))
 import Control.DeepSeq (NFData(..))
-import Data.Char (ord, chr)
 
 data FilePath = FilePath { ar :: A.Array } --Posix.RawFilePath
 
@@ -48,6 +47,14 @@ unsafeWriteChar :: A.MArray d -> Int -> Char -> ST d ()
 unsafeWriteChar A.MArray{..} (I# i#) (C# e#) = ST $ \s1# ->
   case writeCharArray# maBA i# e# s1# of
     s2# -> (# s2#, () #)
+
+unsafeWriteChars :: A.MArray s -> Int -> [Char] -> ST s ()
+unsafeWriteChars A.MArray{..} i cs = ST $ \s# -> (# writeChars i cs s#, () #)
+  where writeChars _ [] s# = s#
+        writeChars i'@(I# i#) (C# c# : cs') s# =
+          let s1# = writeCharArray# maBA i# c# s#
+          in writeChars (i' + 1) cs' s1#
+
 
 unsafeIndex :: FilePath -> Int -> Char
 unsafeIndex (FilePath A.Array{..}) (I# i#) = C# (indexCharArray# aBA i#)
@@ -72,19 +79,24 @@ instance Show FilePath where
   show = show . toString
 
 instance Eq FilePath where
-  x == y
-    | (fpLength x /= fpLength y) = False
-    | fpLength x == 0 = True
-    -- A.equal expects 2-byte chars
-    | fpLength x == 1 = (fpLast x == fpLast y)
-    | fpLength x `mod` 2 == 0 = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
-    | otherwise = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
-                  && (fpLast x == fpLast y)
+  (==) = equal
+
+{-# INLINE equal #-}
+equal :: FilePath -> FilePath -> Bool
+equal x y
+  | (fpLength x /= fpLength y) = False
+  | fpLength x == 0 = True
+  -- A.equal expects 2-byte chars
+  | fpLength x == 1 = (fpLast x == fpLast y)
+  | fpLength x `mod` 2 == 0 = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
+  | otherwise = A.equal (ar x) 0 (ar y) 0 (fpLength x `div` 2)
+                && (fpLast x == fpLast y)
 
 instance Ord FilePath where
   -- {-# INLINE compare #-}
   compare = fpCompare
 
+{-# INLINE fpCompare #-}
 fpCompare :: FilePath -> FilePath -> Ordering
 fpCompare x y
     | (fpLength x == 0) && (fpLength y == 0) = EQ
@@ -105,15 +117,26 @@ instance NFData FilePath where
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
-  get = fromString . reverse <$> go []
-    where go s = do
-            c <- get :: Get Char
-            if ord c == 0
-            then return s
-            else go (c : s)
+  get = do
+    len <- (get :: Get Int)
+    let go 0 = return []
+        go n = do
+          c <- get :: Get Char
+          (c :) <$> go (n - 1)
+    chars <- go len
+    return $ FilePath $ A.run $ do
+      ar <- new len
+      unsafeWriteChars ar 0 chars
+      return ar
+
   put x = do
-    mapM_ (put . unsafeIndex x) [0..fpLength x - 1]
-    put (chr 0)
+    put (fpLength x :: Int)
+    let go n
+          | n == (fpLength x) = return ()
+          | otherwise = do
+              put $ unsafeIndex x n
+              go (n + 1)
+    go 0
 
 instance Read FilePath where
   readPrec = fromString <$> readPrec
