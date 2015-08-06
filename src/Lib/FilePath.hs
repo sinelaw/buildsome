@@ -35,8 +35,11 @@ import GHC.Base (Char(..), Int(..), writeCharArray#, indexCharArray#, newByteArr
 import Data.String (IsString(..))
 import GHC.ST (ST(..))
 import Control.DeepSeq (NFData(..))
+import Data.Char (ord)
+import Data.IORef (newIORef, IORef)
+import System.IO.Unsafe (unsafePerformIO)
 
-newtype FilePath = FilePath A.Array --Posix.RawFilePath
+data FilePath = FilePath (IORef (), Integer) A.Array --Posix.RawFilePath
 
 new :: Int -> ST s (A.MArray s)
 new (I# len#) = ST $ \s1# ->
@@ -49,17 +52,25 @@ unsafeWriteChar A.MArray{..} (I# i#) (C# e#) = ST $ \s1# ->
     s2# -> (# s2#, () #)
 
 unsafeIndex :: FilePath -> Int -> Char
-unsafeIndex (FilePath A.Array{..}) (I# i#) = C# (indexCharArray# aBA i#)
+unsafeIndex (FilePath _ A.Array{..}) (I# i#) = C# (indexCharArray# aBA i#)
 
 safeIndex :: FilePath -> Int -> Maybe Char
 safeIndex fp i = if null fp then Nothing else Just (unsafeIndex fp i)
 
-instance Eq FilePath where
-  x == y = (fpLength x == fpLength y) && (toString x == toString y)
+fpHash :: FilePath -> Integer
+fpHash fp = foldr accumHash  0 [0..fpLength fp - 1]
+  where p = 256
+        accumHash i s = s + (fromIntegral . ord $ unsafeIndex fp i) * (p ^ i)
+
+setHash :: FilePath -> FilePath
+setHash fp@(FilePath (r,_) ar) = FilePath (r, fpHash fp) ar
+
+mkFilePath :: A.Array -> FilePath
+mkFilePath = FilePath (unsafePerformIO $ newIORef (), 0)
 
 instance Monoid FilePath where
   mempty = fromString []
-  x `mappend` y = FilePath $ A.run $ do
+  x `mappend` y = setHash . mkFilePath $ A.run $ do
     ar <- new (fpLength x + fpLength y)
     forM_ [0 .. fpLength x - 1]
       (\i -> unsafeWriteChar ar i $ unsafeIndex x i)
@@ -70,18 +81,23 @@ instance Monoid FilePath where
 instance Show FilePath where
   show = show . toString
 
-instance Ord FilePath where
-  x `compare` y =
-    case compareRes of
-      EQ ->  (fpLength x) `compare` (fpLength y)
-      r -> r
+instance Eq FilePath where
+  x@(FilePath xh _) == y@(FilePath yh _) =
+    ((fpLength x) == (fpLength y))
+    && (xh == yh)
+    && compareRes
     where minLen = min (fpLength x) (fpLength y)
-          compareAt i = (unsafeIndex x i) `compare` (unsafeIndex y i)
-          compareRes = foldr (\i p -> compareAt i <> p) EQ [0 .. minLen]
+          compareAt i = (unsafeIndex x i) == (unsafeIndex y i)
+          compareRes = foldr (\i p -> compareAt i && p) True [0 .. minLen - 1]
+
+
+instance Ord FilePath where
+  {-# INLINE compare #-}
+  (FilePath (_,xh) _) `compare` (FilePath (_,yh) _) = xh `compare` yh
 
 
 instance NFData FilePath where
-  rnf (FilePath A.Array{..}) = C# i `seq` ()
+  rnf (FilePath (_,h) A.Array{..}) = (rnf h, C# i) `seq` ()
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
@@ -92,7 +108,7 @@ instance Read FilePath where
   readPrec = fromString <$> readPrec
 
 instance IsString FilePath where
-  fromString s = FilePath $ A.run $ do
+  fromString s = setHash . mkFilePath $ A.run $ do
     ar <- new (length s)
     forM_ (zip s [0..]) (\(c, i) -> unsafeWriteChar ar i c)
     return ar
@@ -101,7 +117,7 @@ null :: FilePath -> Bool
 null fp = 0 == fpLength fp
 
 fpLength :: FilePath -> Int
-fpLength (FilePath ar) = I# (Prim.sizeofByteArray# (A.aBA ar))
+fpLength (FilePath _ ar) = I# (Prim.sizeofByteArray# (A.aBA ar))
 
 fpInit :: FilePath -> FilePath
 fpInit = fromString . init . toString
