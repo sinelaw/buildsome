@@ -15,12 +15,12 @@ import Prelude.Compat hiding (FilePath)
 
 
 import Control.Monad
+import Data.Binary (get)
 import Data.Binary.Get
 import Data.Bits
 import Data.ByteString (ByteString)
 import Data.IntMap (IntMap, (!))
 import Data.Word
-import Lib.ByteString (truncateAt)
 import Lib.Directory (catchDoesNotExist)
 import Lib.FilePath (FilePath, (</>))
 import Numeric (showOct)
@@ -137,7 +137,13 @@ mAX_EXEC_FILE :: Int
 mAX_EXEC_FILE = mAX_PATH
 
 getNullTerminated :: Int -> Get FilePath
-getNullTerminated len = (FilePath.fromBS . truncateAt 0) <$> getByteString len
+getNullTerminated len = do
+  fp <- FilePath.getNullTerminated
+  let rest = len - FilePath.fpLength fp - 1
+  if rest < 0
+  then error "string too long!"
+  else skip rest
+  return fp
 
 getPath :: Get FilePath
 getPath = getNullTerminated mAX_PATH
@@ -186,10 +192,14 @@ execP file cwd envPath confStrPath
     search :: [ByteString] -> [ByteString] -> IO Func
     search attempted [] = return $ ExecP Nothing $ map FilePath.fromBS attempted
     search attempted (path:paths) = do
-      canExec <- fileAccess path False False True `catchDoesNotExist` return False
-      if canExec
-        then return $ ExecP (Just $ FilePath.fromBS path) $ map FilePath.fromBS attempted
-        else search (path:attempted) paths
+      doesExist <- FilePath.exists $ FilePath.fromBS path
+      if doesExist
+      then do
+        canExec <- fileAccess path False False True `catchDoesNotExist` return False
+        if canExec
+          then return $ ExecP (Just $ FilePath.fromBS path) $ map FilePath.fromBS attempted
+          else search (path:attempted) paths
+      else search (path:attempted) paths
 
 funcs :: IntMap (String, Get (IO Func))
 funcs =

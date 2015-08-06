@@ -3,7 +3,7 @@
 {-# LANGUAGE MagicHash, OverloadedStrings, UnboxedTuples #-}
 module Lib.FilePath
   ( FilePath
-  , isAbsolute, null, toString
+  , isAbsolute, null, toString, getNullTerminated, fpLength
   , splitFileName
   , canonicalizePath
   , canonicalizePathAsRelative
@@ -35,8 +35,9 @@ import GHC.Base (Char(..), Int(..), writeCharArray#, indexCharArray#, newByteArr
 import Data.String (IsString(..))
 import GHC.ST (ST(..))
 import Control.DeepSeq (NFData(..))
+import Data.Char (ord)
 
-data FilePath = FilePath { ar :: A.Array } --Posix.RawFilePath
+data FilePath = FilePath { ar :: A.Array, fpStr :: String } --Posix.RawFilePath
 
 new :: Int -> ST s (A.MArray s)
 new (I# len#) = ST $ \s1# ->
@@ -57,13 +58,13 @@ unsafeWriteChars A.MArray{..} i cs = ST $ \s# -> (# writeChars i cs s#, () #)
 
 
 unsafeIndex :: FilePath -> Int -> Char
-unsafeIndex (FilePath A.Array{..}) (I# i#) = C# (indexCharArray# aBA i#)
+unsafeIndex (FilePath A.Array{..} _) (I# i#) = C# (indexCharArray# aBA i#)
 
 safeIndex :: FilePath -> Int -> Maybe Char
 safeIndex fp i = if null fp then Nothing else Just (unsafeIndex fp i)
 
 mkFilePath :: A.Array -> FilePath
-mkFilePath = FilePath
+mkFilePath ar = FilePath ar (toString' $ FilePath ar [])
 
 instance Monoid FilePath where
   mempty = fromString []
@@ -113,7 +114,7 @@ fpCompare x y
             b = unsafeIndex y i
 
 instance NFData FilePath where
-  rnf (FilePath A.Array{..}) = C# i `seq` ()
+  rnf (FilePath A.Array{..} _) = C# i `seq` ()
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
@@ -141,8 +142,21 @@ decodeFP = do
         c <- get :: Get Char
         (c :) <$> go (n - 1)
   chars <- go len
-  return $ FilePath $ A.run $ do
+  return $ mkFilePath $ A.run $ do
     ar <- new len
+    unsafeWriteChars ar 0 chars
+    return ar
+
+getNullTerminated :: Get FilePath
+getNullTerminated = do
+  let go = do
+        c <- get :: Get Char
+        if (ord c == 0)
+        then return []
+        else (c :) <$> go
+  chars <- go
+  return $ mkFilePath $ A.run $ do
+    ar <- new $ length chars
     unsafeWriteChars ar 0 chars
     return ar
 
@@ -159,7 +173,7 @@ null :: FilePath -> Bool
 null fp = 0 == fpLength fp
 
 fpLength :: FilePath -> Int
-fpLength (FilePath ar) = I# (Prim.sizeofByteArray# (A.aBA ar))
+fpLength (FilePath ar _) = I# (Prim.sizeofByteArray# (A.aBA ar))
 
 fpInit :: FilePath -> FilePath
 fpInit = fromString . init . toString
@@ -170,8 +184,11 @@ fpLast fp = safeIndex fp (fpLength fp - 1)
 isLast :: FilePath -> Char -> Bool
 isLast fp c = fpLast fp == Just c
 
-toString :: FilePath -> [Char]
-toString fp = map (unsafeIndex fp) [0..fpLength fp - 1]
+toString' :: FilePath -> [Char]
+toString' fp = map (unsafeIndex fp) [0..fpLength fp - 1]
+
+toString :: FilePath -> String
+toString = fpStr
 
 {-# INLINE toBS #-}
 toBS :: FilePath -> ByteString
