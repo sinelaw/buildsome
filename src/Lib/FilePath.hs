@@ -22,7 +22,7 @@ import Control.Exception (catch, throwIO)
 import Data.ByteString.Char8 (ByteString)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
-import Data.Binary (Binary(..))
+import Data.Binary (Binary(..), Get)
 import GHC.Read (Read(..))
 import GHC.IO.Exception (IOErrorType(..))
 import Lib.ByteString (unprefixed)
@@ -35,7 +35,7 @@ import GHC.Base (Char(..), Int(..), writeCharArray#, indexCharArray#, newByteArr
 import Data.String (IsString(..))
 import GHC.ST (ST(..))
 import Control.DeepSeq (NFData(..))
-import Data.Char (ord)
+import Data.Char (ord, chr)
 import Data.IORef (newIORef, IORef)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -101,8 +101,17 @@ instance NFData FilePath where
     where i = indexCharArray# aBA 0#
 
 instance Binary FilePath where
-  get = fromString <$> get
-  put = put . toString
+  get = do
+      str <- go []
+      return $ fromString str
+    where go s = do
+            c <- get :: Get Char
+            if ord c == 0
+            then return s
+            else go (c : s)
+  put x = do
+    mapM_ (put . unsafeIndex x) [0..fpLength x - 1]
+    put (chr 0)
 
 instance Read FilePath where
   readPrec = fromString <$> readPrec
