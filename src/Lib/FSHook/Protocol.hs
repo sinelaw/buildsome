@@ -1,19 +1,20 @@
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
+{-# LANGUAGE GADTs, OverloadedStrings, DeriveGeneric, DeriveFunctor #-}
 module Lib.FSHook.Protocol
   ( parseMsg, helloPrefix
   , OpenWriteMode(..), showOpenWriteMode
   , OpenTruncateMode(..), showOpenTruncateMode
   , CreationMode(..), showCreationMode
   , InFilePath, OutFilePath(..), OutEffect(..)
-  , Func(..), showFunc
+  , Func, FuncIO(..), showFunc
   , IsDelayed(..)
   , Msg(..)
   ) where
 
 import Prelude.Compat hiding (FilePath)
 
-
+import Data.Interned (Uninternable(..))
+import Data.Interned.ByteString (InternedByteString(..))
 import Control.Monad
 import Data.Binary.Get
 import Data.Binary (Binary(..))
@@ -22,6 +23,7 @@ import Data.Bits
 import Data.ByteString (ByteString)
 import Data.IntMap (IntMap, (!))
 import Data.Word
+import Data.String (IsString(..))
 import Lib.ByteString (truncateAt)
 import Lib.Directory (catchDoesNotExist)
 import Lib.FilePath (FilePath, (</>))
@@ -73,31 +75,60 @@ data OutFilePath = OutFilePath
   } deriving (Eq, Ord, Show, Generic)
 instance Binary OutFilePath
 
-data Func
-  = OpenR !InFilePath
-  | OpenW !OutFilePath !OpenWriteMode !CreationMode !OpenTruncateMode
-  | Stat !InFilePath
-  | LStat !InFilePath
-  | Creat !OutFilePath !Word32
-  | Rename !OutFilePath !OutFilePath
-  | Unlink !OutFilePath
-  | Access !InFilePath !Word32{- TODO: replace Int with AccessMode -}
-  | OpenDir !InFilePath
-  | Truncate !OutFilePath !Word64{- length -}
-  | Chmod !OutFilePath !Word32{-mode-}
-  | ReadLink !InFilePath
-  | MkNod !OutFilePath !Word32{-mode-} !Word64{-dev-}
-  | MkDir !OutFilePath !Word32{-mode-}
-  | RmDir !OutFilePath
-  | SymLink !InFilePath !OutFilePath
-  | Link !OutFilePath !OutFilePath
-  | Chown !OutFilePath !Word32 !Word32
-  | Exec !InFilePath
-  | ExecP !(Maybe FilePath) ![FilePath]{-prior searched paths (that did not exist)-}
-  | RealPath !InFilePath
-  deriving (Show, Generic)
+data FuncIO ifp ouf
+  = OpenR ifp
+  | OpenW ouf OpenWriteMode CreationMode OpenTruncateMode
+  | Stat ifp
+  | LStat ifp
+  | Creat ouf Word32
+  | Rename ouf ouf
+  | Unlink ouf
+  | Access ifp Word32{- TODO: replace Int with AccessMode -}
+  | OpenDir ifp
+  | Truncate ouf Word64{- length -}
+  | Chmod ouf Word32{-mode-}
+  | ReadLink ifp
+  | MkNod ouf Word32{-mode-} Word64{-dev-}
+  | MkDir ouf Word32{-mode-}
+  | RmDir ouf
+  | SymLink ifp ouf
+  | Link ouf ouf
+  | Chown ouf Word32 Word32
+  | Exec ifp
+  | ExecP (Maybe FilePath) [FilePath]{-prior searched paths (that did not exist)-}
+  | RealPath ifp
+  deriving (Show, Functor)
 
-instance Binary Func
+
+type Func = FuncIO InFilePath OutFilePath
+
+bimapFunc :: (i -> i') -> (o -> o') -> FuncIO i o -> FuncIO i' o'
+bimapFunc f g func =
+  case func of
+  OpenR ifp -> OpenR (f ifp)
+  Stat ifp -> Stat (f ifp)
+  LStat ifp -> LStat (f ifp)
+  Access ifp w -> Access (f ifp) w
+  OpenDir ifp -> OpenDir (f ifp)
+  ReadLink ifp -> ReadLink (f ifp)
+  SymLink ifp ouf -> SymLink (f ifp) (g ouf)
+  Exec ifp -> Exec (f ifp)
+  RealPath ifp -> RealPath (f ifp)
+  OpenW ouf ow ct ot -> OpenW (g ouf) ow ct ot
+  Creat ouf w -> Creat (g ouf) w
+  Rename ouf1 ouf2 -> Rename (g ouf1) (g ouf2)
+  Unlink ouf -> Unlink (g ouf)
+  Truncate ouf w -> Truncate (g ouf) w
+  Chmod ouf w -> Chmod (g ouf) w
+  MkNod ouf w1 w2 -> MkNod (g ouf) w1 w2
+  MkDir ouf w -> MkDir (g ouf) w
+  RmDir ouf -> RmDir (g ouf)
+  Link ouf1 ouf2 -> Link (g ouf1) (g ouf2)
+  Chown ouf w1 w2 -> Chown (g ouf) w1 w2
+  ExecP mf fs -> ExecP mf fs
+
+internFuncPaths :: FuncIO ByteString o -> FuncIO ByteString o
+internFuncPaths func = bimapFunc (unintern . (fromString :: String -> InternedByteString) . BS8.unpack) id func
 
 -- Hook is delayed waiting for handler to complete
 data IsDelayed = Delayed | NotDelayed
@@ -150,7 +181,9 @@ getNullTerminated :: Int -> Get FilePath
 getNullTerminated len = truncateAt 0 <$> getByteString len
 
 getPath :: Get FilePath
-getPath = getNullTerminated mAX_PATH
+getPath = do
+  path <- getNullTerminated mAX_PATH
+  return $ (path :: ByteString)
 
 getInPath :: Get InFilePath
 getInPath = getPath
@@ -237,7 +270,7 @@ parseMsgLazy bs =
       ioFunc <- getter
       finished <- isEmpty
       unless finished $ fail "Unexpected trailing input in message"
-      return (if isDelayedInt == 0 then NotDelayed else Delayed, ioFunc)
+      return (if isDelayedInt == 0 then NotDelayed else Delayed, internFuncPaths <$> ioFunc)
 
 {-# INLINE strictToLazy #-}
 strictToLazy :: ByteString -> BSL.ByteString
