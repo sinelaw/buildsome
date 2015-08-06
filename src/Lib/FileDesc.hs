@@ -112,7 +112,7 @@ instance Cmp FileStatDesc where
   FileStatDirectory _ `cmp` FileStatOther _ = Cmp.NotEquals ["Directory vs. Non-directory"]
 
 instance Binary Posix.CMode where
-  get = {-# CMode_get #-} (Posix.CMode <$> get)
+  get = (Posix.CMode <$> get)
   put (Posix.CMode x) = put x
 
 data UnsupportedFileTypeError = UnsupportedFileTypeError FilePath deriving (Show, Typeable)

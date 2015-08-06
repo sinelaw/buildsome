@@ -15,12 +15,12 @@ import Prelude.Compat hiding (FilePath)
 
 
 import Control.Monad
-import Data.Binary (get)
 import Data.Binary.Get
 import Data.Bits
 import Data.ByteString (ByteString)
 import Data.IntMap (IntMap, (!))
 import Data.Word
+import Lib.ByteString (truncateAt)
 import Lib.Directory (catchDoesNotExist)
 import Lib.FilePath (FilePath, (</>))
 import Numeric (showOct)
@@ -137,13 +137,7 @@ mAX_EXEC_FILE :: Int
 mAX_EXEC_FILE = mAX_PATH
 
 getNullTerminated :: Int -> Get FilePath
-getNullTerminated len = do
-  fp <- FilePath.getNullTerminated
-  let rest = len - FilePath.fpLength fp - 1
-  if rest < 0
-  then error "string too long!"
-  else skip rest
-  return fp
+getNullTerminated len = (FilePath.fromBS . truncateAt 0) <$> getByteString len
 
 getPath :: Get FilePath
 getPath = getNullTerminated mAX_PATH
