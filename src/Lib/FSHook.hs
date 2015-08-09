@@ -64,11 +64,10 @@ import qualified Network.Socket.ByteString as SockBS
 import qualified System.Posix.ByteString as Posix
 
 data AccessDoc =
-    AccessDoc Protocol.Func JobLabel
-    | AccessDocEmpty
+--    AccessDoc Protocol.Func JobLabel
+    AccessDocEmpty
     deriving (Show, Generic)
 instance Binary AccessDoc
-
 type JobId = ByteString
 
 data Input = Input
