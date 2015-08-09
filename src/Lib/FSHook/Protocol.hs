@@ -13,7 +13,7 @@ module Lib.FSHook.Protocol
 
 import Prelude.Compat hiding (FilePath)
 
-import Data.Interned (Uninternable(..))
+import Data.Interned (Uninternable(..), intern)
 import Data.Interned.ByteString (InternedByteString(..))
 import Control.Monad
 import Data.Binary.Get
@@ -128,7 +128,7 @@ bimapFunc f g func =
   ExecP mf fs -> ExecP mf fs
 
 internFuncPaths :: FuncIO ByteString o -> FuncIO ByteString o
-internFuncPaths func = bimapFunc (unintern . (fromString :: String -> InternedByteString) . BS8.unpack) id func
+internFuncPaths func = bimapFunc (\x -> unintern (intern (BS8.copy x) :: InternedByteString)) id func
 
 -- Hook is delayed waiting for handler to complete
 data IsDelayed = Delayed | NotDelayed
@@ -178,7 +178,7 @@ mAX_EXEC_FILE :: Int
 mAX_EXEC_FILE = mAX_PATH
 
 getNullTerminated :: Int -> Get FilePath
-getNullTerminated len = truncateAt 0 <$> getByteString len
+getNullTerminated len = BS8.copy . truncateAt 0 <$> getByteString len
 
 getPath :: Get FilePath
 getPath = do
