@@ -23,6 +23,7 @@ BuildRequires:  ghc-mtl-devel
 BuildRequires:  ghc-text-devel
 BuildRequires:  ghc-random-devel
 BuildRequires:  ghc-template-haskell-devel
+BuildRequires:  ghc-hashable-devel
 
 BuildRequires:  leveldb-devel
 BuildRequires:  snappy-devel
