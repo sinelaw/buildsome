@@ -1,0 +1,45 @@
+Name:           PKG_NAME
+Version:        PKG_VERSION
+Release:        PKG_RELEASE%{?dist}
+Summary:        cabal dependencies for buildsome
+
+Group:          System Environment/Libraries
+License:        GPLv2
+URL:            https://github.com/ElastiLotem/buildsome
+Source0:        %{name}-%{version}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}.%{_arch}
+
+# Don't do automatic requires/provides detection
+AutoReqProv: no
+
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+
+%description
+This package contains cabal dependencies for buildsome, because they are not otherwise available as rpm packages.
+
+%prep
+%setup
+
+
+%build
+
+
+%install
+
+rm -rf %{buildroot}
+%{__mkdir_p} %{buildroot}%{_libdir}/%{name}/
+%{__cp} -r .cabal-sandbox %{buildroot}%{_libdir}/%{name}/
+
+
+%files
+
+
+%{_libdir}/%{name}/.cabal-sandbox/*
+
+
+%doc
+
+
+
+%changelog

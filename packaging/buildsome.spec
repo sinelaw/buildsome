@@ -38,7 +38,7 @@ declaration of the build steps, and give better guarantees to users.
 # It depends on git, we need to fix that. For now:
 export BUILDSOME_BUILT_REVISION=%{version}-%{release}
 cabal configure --flags="CentOS7" --prefix=%{_prefix} \
-   --package-db /usr/share/buildsome-deps/.cabal-sandbox/*-packages.conf.d/
+   --package-db %{_libdir}/buildsome-deps/.cabal-sandbox/*-packages.conf.d/
 cabal build
 
 %install

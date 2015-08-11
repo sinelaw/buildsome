@@ -1,0 +1,65 @@
+#!/bin/bash -eux
+
+SCRIPT_DIR=$(realpath $(dirname ${BASH_SOURCE[0]}))
+cd ${SCRIPT_DIR}
+
+source pkg_version
+
+PKG_NAME=buildsome-deps
+OUTPUT_DIR=${SCRIPT_DIR}
+TARGET_DIR=$(mktemp --tmpdir -d XXXXXXrpm-packaging)
+#TARGET_DIR=${SCRIPT_DIR}/${PKG_NAME}-${PKG_VERSION}-${PKG_RELEASE} 
+RPMBUILD_PARAM="-ba --without mock"
+
+while getopts "s" o; do
+    case "${o}" in
+        s)
+            RPMBUILD_PARAM="-bs"
+            ;;
+        *)
+            echo "pass -s to build a source package to use with mock"
+            exit 1
+            ;;
+    esac
+done
+
+cleanups () {
+    rm -rf ${TARGET_DIR}
+}
+mkdir -p ${TARGET_DIR}/tmp
+#trap cleanups EXIT
+
+make_rpms() {
+    mkdir -p ${TARGET_DIR}/SPECS || return 1
+    mkdir -p ${TARGET_DIR}/SOURCES || return 1
+    mkdir -p ${TARGET_DIR}/SOURCES/${PKG_NAME}-${PKG_VERSION} || return 1
+    cp -r ${SCRIPT_DIR}/../.cabal-sandbox ${TARGET_DIR}/SOURCES/${PKG_NAME}-${PKG_VERSION}  || return 1
+    (cd ${TARGET_DIR}/SOURCES/ && tar czf ${TARGET_DIR}/SOURCES/${PKG_NAME}-${PKG_VERSION}.tar.gz ${PKG_NAME}-${PKG_VERSION}) || return 1
+    SPEC_FILE=${TARGET_DIR}/SPECS/${PKG_NAME}.spec
+    cat ${SCRIPT_DIR}/${PKG_NAME}.spec.in | \
+      sed s/PKG_NAME/${PKG_NAME}/g | \
+      sed s/PKG_VERSION/${PKG_VERSION}/g | \
+      sed s/PKG_RELEASE/${PKG_RELEASE}/g > ${SPEC_FILE} || return 1
+    git log -n 1 --format="* %cd %aN%n- (%h) %s%d%n" --date=local | \
+        sed -r 's/[0-9]+:[0-9]+:[0-9]+ //' >> ${SPEC_FILE}
+    rpmbuild --quiet ${RPMBUILD_PARAM} --define "_topdir ${TARGET_DIR}" \
+                 --define "_tmppath ${TARGET_DIR}/tmp" \
+                 ${TARGET_DIR}/SPECS/${PKG_NAME}.spec || return 1
+    return 0
+}
+
+copy_rpms() {
+    rmps=$(find ${TARGET_DIR}/ -type f -name '*.rpm')
+    for file in ${rmps}; do
+        cp ${file} ${OUTPUT_DIR}
+    done
+}    
+
+prepare_sandbox() {
+    (cd $SCRIPT_DIR/.. && cabal sandbox delete && cabal sandbox init && cabal update && cabal install -j --only-dep)
+}
+
+prepare_sandbox
+make_rpms
+copy_rpms
+cleanups
