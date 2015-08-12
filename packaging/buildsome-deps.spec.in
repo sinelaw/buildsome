@@ -11,6 +11,7 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}.%{_arch}
 
 # Don't do automatic requires/provides detection
 AutoReqProv: no
+Requires: ghc-compiler
 
 %global debug_package %{nil}
 %global __os_install_post %{nil}
@@ -31,12 +32,16 @@ rm -rf %{buildroot}
 %{__mkdir_p} %{buildroot}%{_libdir}/%{name}/
 %{__cp} -r .cabal-sandbox %{buildroot}%{_libdir}/%{name}/
 
-
 %files
 
 
 %{_libdir}/%{name}/.cabal-sandbox/*
 
+%post
+
+# See https://github.com/mietek/halcyon/issues/59
+find %{_libdir}/%{name}/.cabal-sandbox -iname "*.conf" -type f | xargs sed -i 's, /.*/\.cabal-sandbox, /usr/lib64/buildsome-deps/.cabal-sandbox,g'
+ls %{_libdir}/%{name}/.cabal-sandbox/ | grep 'conf\.d' | xargs -t -n1 -i_db_ ghc-pkg --package-db=%{_libdir}/%{name}/.cabal-sandbox/_db_ recache
 
 %doc
 

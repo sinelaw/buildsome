@@ -29,6 +29,9 @@ BuildRequires:  ghc-vector-devel
 BuildRequires:  leveldb-devel
 BuildRequires:  snappy-devel
 
+BuildRequires:  bash
+BuildRequires:  git
+
 %description
 Buildsome is an innovative build system, meant to both ease the
 declaration of the build steps, and give better guarantees to users.
