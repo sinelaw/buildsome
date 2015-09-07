@@ -58,6 +58,7 @@ executable buildsome
                ,     Buildsome.Print
                ,     Buildsome.Slave
                ,     Buildsome.Stats
+               ,     Buildsome.Types
                ,     BMake.User
                ,     BMake.Data
                ,     BMake.Base
