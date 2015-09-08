@@ -14,13 +14,12 @@ import           Buildsome.Db            (ExecutionLog (..),
                                           FileDesc (..), InputDesc (..),
                                           InputLog (..), InputLogStat (..),
                                           bimapFileDesc)
-import           Control.Arrow           (second)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Control.Monad.IO.Class  (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), runEitherT)
-import           Data.Foldable (asum)
-import           Data.List (sort)
-import qualified Data.Map as Map
-import qualified Lib.Directory as Dir
+import           Data.Foldable           (asum)
+import           Data.List               (intercalate, sort)
+import qualified Data.Map                as Map
+import qualified Lib.Directory           as Dir
 import           Lib.FileDesc            (FileStatDesc (..),
                                           FullStatEssence (..),
                                           FileModeDesc (..),
@@ -121,8 +120,10 @@ lookup (ExecutionLogBranch inputs) =
 getInputLogs :: ExecutionLog -> [(FilePath, FileDesc () InputLog)]
 getInputLogs ExecutionLog{..}
   = sort
-  . map (second $ bimapFileDesc (const ()) (inputDescToInputLog . snd))
-  . Map.assocs
+  . Map.toList
+  -- 1. Throw away the Reason by mapping it to ()
+  -- 2. Convert (mtime, InputDesc) to InputLog
+  . fmap (bimapFileDesc (const ()) (inputDescToInputLog . snd))
   $ elInputsDescs
 
 fromExecutionLog :: ExecutionLog -> ExecutionLogTree
@@ -155,7 +156,10 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
         case NonEmptyMap.lookup inputDesc eltiBranches of
           -- none of the existing filedescs matches what we have
           Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-            where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) eltiBranches)
+            where
+              newInput =
+                ExecutionLogTreeInput
+                $ NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) eltiBranches
 
           -- found exact match, append' down the tree
           Just next -> append' (nextInputs, new) (filePath:oldInputs) next
@@ -167,11 +171,11 @@ append' :: ([(FilePath, FileDesc () InputLog)], ExecutionLog)
 append' ([], new)           _inputs   ExecutionLogLeaf{}
   = ExecutionLogLeaf new
 append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
-  = error $ concat
+  = error $ intercalate "\n\t"
     [ "Existing execution log with no further inputs exists, but new one has more inputs!"
 --    , "\n\t Target: ", show $ elCommand el
-    , "\n\t Example extra input: ", show filePath
-    , "\n\t Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
+    , "Example extra input: ", show filePath
+    , "Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
     ]
 append' ([], _)             _inputs   ExecutionLogBranch{}
   = error "Existing execution log has more inputs, but new one has no further inputs!"
