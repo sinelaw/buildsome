@@ -45,6 +45,7 @@ executable buildsome
                ,     Buildsome.Clean
                ,     Buildsome.Color
                ,     Buildsome.CompatMakefile
+               ,     Buildsome.ContentCache
                ,     Buildsome.Db
                ,     Buildsome.ExecutionLogTree
                ,     Buildsome.FileContentDescCache
@@ -116,11 +117,12 @@ executable buildsome
                ,     Lib.Version
                ,     Paths_buildsome
 
-  build-depends:     aeson >=0.7 
+  build-depends:     aeson >=0.7
                    , aeson-pretty >=0.7 && <0.8
                    , ansi-terminal == 0.6.*
                    , array >= 0.5.1
-                   , async >=2.0
+                   , async >=2.0 && <2.2
+                   , base16-bytestring >= 0.1.1.6
                    , base >=4.6 && <4.9
                    , base-compat
                    , binary >=0.7 && <0.8
@@ -146,7 +148,7 @@ executable buildsome
                    , template-haskell >= 2.8 && < 2.11
                    , time >=1.4 && <1.6
                    , transformers >=0.3 && <=0.5
-                   , unix >=2.6 && <2.8
+                   , unix >=2.7 && <2.8
                    , happy
 
   if flag(Charts)
