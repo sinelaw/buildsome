@@ -14,14 +14,13 @@ import           Buildsome.Db            (ExecutionLog (..),
                                           FileDesc (..), InputDesc (..),
                                           InputLog (..), InputLogStat (..),
                                           bimapFileDesc)
-import           Control.Arrow           (second)
-import           Control.Monad           (msum)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Control.Monad.IO.Class  (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), runEitherT)
-import           Data.Foldable (asum)
-import           Data.List (intercalate, sort)
-import qualified Data.Map as Map
-import qualified Lib.Directory as Dir
+import           Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
+import           Data.Foldable           (asum)
+import           Data.List               (intercalate, sort)
+import qualified Data.Map                as Map
+import qualified Lib.Directory           as Dir
 import           Lib.FileDesc            (FileStatDesc (..),
                                           FullStatEssence (..),
                                           FileModeDesc (..),
@@ -121,8 +120,10 @@ lookup (ExecutionLogBranch inputs) =
 getInputLogs :: ExecutionLog -> [(FilePath, FileDesc () InputLog)]
 getInputLogs ExecutionLog{..}
   = sort
-  . map (second $ bimapFileDesc (const ()) (inputDescToInputLog . snd))
-  . Map.assocs
+  . Map.toList
+  -- 1. Throw away the Reason by mapping it to ()
+  -- 2. Convert (mtime, InputDesc) to InputLog
+  . fmap (bimapFileDesc (const ()) (inputDescToInputLog . snd))
   $ elInputsDescs
 
 fromExecutionLog :: ExecutionLog -> ExecutionLogTree
@@ -140,14 +141,14 @@ append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el elt' = go (getInputLogs el, el) elt' []
   where
     go ([], new) ExecutionLogLeaf{} _ = ExecutionLogLeaf new
-    go ((filePath,_):_, _) (ExecutionLogLeaf{}) oldInputs
-      = error $ concat
+    go ((filePath,_):_, _) ExecutionLogLeaf{} oldInputs
+      = error $ intercalate "\n\t"
         [ "Existing execution log with no further inputs exists, but new one has more inputs!"
-        , "\n\t Target: ", show $ elCommand el
-        , "\n\t Example extra input: ", show filePath
-        , "\n\t Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
+        , "Target: ", show $ elCommand el
+        , "Example extra input: ", show filePath
+        , "Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
         ]
-    go ([], _) (ExecutionLogBranch{}) _
+    go ([], _) ExecutionLogBranch{} _
       = error "Existing execution log has more inputs, but new one has no further inputs!"
     go ((filePath, inputDesc) : is, new) (ExecutionLogBranch inputses) oldInputs
       = case NonEmptyMap.lookup filePath inputses of
@@ -157,11 +158,14 @@ append el elt' = go (getInputLogs el, el) elt' []
 
           -- found an input with the same file path, need to check
           -- it's filedesc
-          Just (ExecutionLogTreeInput{..}) ->
+          Just ExecutionLogTreeInput{..} ->
             case NonEmptyMap.lookup inputDesc eltiBranches of
               -- none of the existing filedescs matches what we have
               Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-                where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches)
+                where
+                  newInput =
+                    ExecutionLogTreeInput
+                    $ NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches
 
               -- found exact match, go down the tree
               Just next -> go (is, new) next (filePath:oldInputs)
