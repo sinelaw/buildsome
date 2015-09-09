@@ -13,57 +13,30 @@ import           Buildsome.Db            (ExecutionLog (..),
                                           ExecutionLogTree (..),
                                           ExecutionLogTreeInput (..),
                                           FileDesc (..), InputDesc (..),
-                                          InputLog (..), InputLogStat (..),
-                                          bimapFileDesc)
+                                          FileDescInput)
 import           Control.Monad.IO.Class  (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), runEitherT)
 
 import           Data.Foldable           (asum)
 import           Data.List               (intercalate)
 import qualified Data.Map                as Map
+import           Lib.Cmp                 (Cmp(..), ComparisonResult(..), Reasons)
 import qualified Lib.Directory           as Dir
-import           Lib.FileDesc            (FileStatDesc (..),
-                                          FullStatEssence (..),
-                                          FileModeDesc (..),
-                                          FileContentDesc (..),
-                                          fileContentDescOfStat,
+import           Lib.FileDesc            (fileContentDescOfStat,
                                           fileModeDescOfStat,
                                           fileStatDescOfStat,
                                           fileStatDescOfStat)
 import           Lib.FilePath (FilePath)
 import qualified Lib.NonEmptyMap as NonEmptyMap
+import           Lib.NonEmptyList (NonEmptyList)
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
-
-fileDescToInputLogStat :: FileStatDesc -> InputLogStat
-fileDescToInputLogStat (FileStatDirectory stat) =
-  InputLogStat
-  { ilsBasicStatEssence = stat
-  , ilsFileSize = Nothing --fileSize statDesc
-  , ilsFileType = Nothing -- fileType statDesc
-  }
-fileDescToInputLogStat (FileStatOther stat) =
-  InputLogStat
-  { ilsBasicStatEssence = basicStatEssence stat
-  , ilsFileSize = Just $ fileSize stat
-  , ilsFileType = Just $ fileType stat
-  }
-
-inputDescToInputLog :: InputDesc -> InputLog
-inputDescToInputLog InputDesc{..} =
-  InputLog
-  { ilModeAccess = snd <$> idModeAccess
-  , ilStatAccess = fileDescToInputLogStat . snd <$> idStatAccess
-  , ilContentAccess = snd <$> idContentAccess
-  }
 
 data MismatchReason
   = MismatchExpectedExisting
   | MismatchExpectedNonExisting
-  | MismatchStatDiffers InputLogStat InputLogStat
-  | MismatchModeDiffers FileModeDesc FileModeDesc
-  | MismatchContentDiffers FileContentDesc FileContentDesc
-  deriving (Show, Eq, Ord)
+  | MismatchFileDiffers Reasons
+  deriving (Show)
 
 andRight :: [Either a t] -> Either a ()
 andRight [] = Right ()
@@ -72,65 +45,79 @@ andRight (Right _ : xs) = andRight xs
 
 matchesCurrentFS
   :: (Functor m, Applicative m, MonadIO m)
-  => FilePath -> Maybe Posix.FileStatus -> FileDesc t InputLog
+  => FilePath -> Maybe Posix.FileStatus -> FileDescInput
   -> m (Either [MismatchReason] ())
 matchesCurrentFS filePath mStat inputDesc =
   case (inputDesc, mStat) of
   (FileDescNonExisting{}, Nothing) -> return $ Right ()
   (FileDescNonExisting{}, Just _ ) -> return $ Left [MismatchExpectedNonExisting]
   (FileDescExisting{}   , Nothing) -> return $ Left [MismatchExpectedExisting]
-  (FileDescExisting inputFileDesc, Just stat) ->
+  (FileDescExisting (_mtime, inputFileDesc), Just stat) ->
     andRight <$> sequenceA
-    [ compareProp (ilModeAccess inputFileDesc)    (return $ fileModeDescOfStat stat) MismatchModeDiffers
-    , compareProp (ilStatAccess inputFileDesc)    (return . fileDescToInputLogStat $ fileStatDescOfStat stat) MismatchStatDiffers
-    , compareProp (ilContentAccess inputFileDesc) (liftIO $ fileContentDescOfStat filePath stat) MismatchContentDiffers
+    [ compareProp (idModeAccess inputFileDesc)    (return $ fileModeDescOfStat stat)
+    , compareProp (idStatAccess inputFileDesc)    (return $ fileStatDescOfStat stat)
+    , compareProp (idContentAccess inputFileDesc) (liftIO $ fileContentDescOfStat filePath stat)
     ]
-  where compareProp prop act err = maybe (return $ Right ()) (check act err) prop
-        check act err x = do
-          res <- act
-          if x == res then return (Right ()) else return (Left [err x res])
+
+compareProp
+ :: (Monad m, Cmp a)
+ => Maybe (a1, a) -> m a -> m (Either [MismatchReason] ())
+compareProp prop act =
+  maybe (return $ Right ()) check $ fmap snd prop
+    where
+      check x = do
+        res <- act
+        case x `cmp` res of
+          Equals -> return (Right ())
+          NotEquals r -> return (Left [MismatchFileDiffers r])
 
 firstRightAction
   :: (Applicative m, Monad m, Functor t, Foldable t, Monoid e)
   => t (m (Either e a)) -> m (Either e a)
 firstRightAction = runEitherT . asum . fmap EitherT
 
-mapRight :: (r1 -> r2) -> Either a r1 -> Either a r2
-mapRight _ (Left e) = Left e
-mapRight f (Right r) = Right $ f r
+bimapEither :: (e -> e') -> (a -> a') -> Either e a -> Either e' a'
+bimapEither f _ (Left x)  = Left $ f x
+bimapEither _ g (Right x) = Right $ g x
+
+checkBranches
+  :: (Functor m, Applicative m, MonadIO m)
+  => FilePath -> Maybe Posix.FileStatus -> NonEmptyMap.NonEmptyMap FileDescInput b
+  -> NonEmptyList (m (Either [(b, MismatchReason)] (FileDescInput, b)))
+checkBranches filePath mStat branches =
+  fmap (\x -> fmap (bimapEither (map (snd x,)) (const x)) <$> matchesCurrentFS filePath mStat $ fst x)
+  $ NonEmptyMap.toNonEmptyList branches
 
 lookupInput :: FilePath -> ExecutionLogTreeInput -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
 lookupInput filePath ExecutionLogTreeInput{..} = do
   mStat <- liftIO $ Dir.getMFileStatus filePath
-  let matches =
-        map (\x -> fmap (mapRight (const x)) <$> matchesCurrentFS filePath mStat $ fst x)
-        $ NonEmptyMap.toList eltiBranches
-  match <- firstRightAction matches
+  match <- firstRightAction $ checkBranches filePath mStat eltiBranches
   case match of
     -- include the input path in the error, for caller's convenience
-    Left reasons -> return . Left $ map (filePath,) reasons
+    Left results -> do
+      branchResults <- mapM (lookup . fst) results
+      return
+        $ Left
+        . ((map ((filePath, ) . snd) results) ++)
+        $ mconcat $ map (either id (const [])) branchResults
+
     Right (_, elt) -> lookup elt
 
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup (ExecutionLogLeaf el) = return $ Right el
+lookup (ExecutionLogLeaf el)       = return $ Right el
 lookup (ExecutionLogBranch inputs) =
   firstRightAction
   . map (uncurry lookupInput)
   . NonEmptyMap.toList
   $ inputs
 
-getInputLogs :: ExecutionLog -> [(FilePath, FileDesc () InputLog)]
-getInputLogs ExecutionLog{..}
-  = Map.toList
-  -- 1. Throw away the Reason by mapping it to ()
-  -- 2. Convert (mtime, InputDesc) to InputLog
-  . fmap (bimapFileDesc (const ()) (inputDescToInputLog . snd))
-  $ elInputsDescs
+inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
+inputsList ExecutionLog{..} = Map.toList elInputsDescs
 
 fromExecutionLog :: ExecutionLog -> ExecutionLogTree
-fromExecutionLog el = fromExecutionLog' el $ getInputLogs el
+fromExecutionLog el = fromExecutionLog' el $ inputsList el
 
-fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDesc () InputLog)] -> ExecutionLogTree
+fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTree
 fromExecutionLog' el [] = ExecutionLogLeaf el
 fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   ExecutionLogBranch
@@ -139,7 +126,7 @@ fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
-append el elt' = go (getInputLogs el, el) elt' []
+append el elt' = go (inputsList el, el) elt' []
   where
     go ([], new) ExecutionLogLeaf{} _ = ExecutionLogLeaf new
     go ((filePath,_):_, _) ExecutionLogLeaf{} oldInputs

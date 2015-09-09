@@ -9,7 +9,9 @@ module Buildsome.Db
   , InputDesc(..), FileDesc(..), bimapFileDesc
   , OutputDesc(..)
   , ExecutionLog(..), executionLogTree
-  , InputLog(..), InputLogStat(..), ExecutionLogTree(..), ExecutionLogTreeInput(..)
+  , latestExecutionLog
+  , FileDescInput
+  , ExecutionLogTree(..), ExecutionLogTreeInput(..)
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
   , IRef(..)
@@ -35,9 +37,9 @@ import           Lib.Binary (encode, decode)
 import           Lib.Directory (catchDoesNotExist, createDirectories, makeAbsolutePath)
 import           Lib.Exception (bracket)
 import qualified Lib.FSHook as FSHook
-import           Lib.FileDesc (FileContentDesc, FileModeDesc, FileStatDesc, BasicStatEssence)
+import           Lib.FileDesc (FileContentDesc, FileModeDesc, FileStatDesc)
 import           Lib.FilePath (FilePath, (</>), (<.>))
-import           Lib.Posix.FileType (FileType)
+
 import           Lib.Makefile (Makefile)
 import qualified Lib.Makefile as Makefile
 import           Lib.Makefile.Monad (PutStrLn)
@@ -73,7 +75,7 @@ data Reason
   | BecauseContainerDirectoryOfOutput FilePath
   | BecauseInput Reason FilePath
   | BecauseRequested ByteString
-  deriving (Generic, Show)
+  deriving (Generic, Show, Ord, Eq)
 instance Binary Reason
 
 
@@ -81,7 +83,7 @@ data InputDesc = InputDesc
   { idModeAccess :: Maybe (Reason, FileModeDesc)
   , idStatAccess :: Maybe (Reason, FileStatDesc)
   , idContentAccess :: Maybe (Reason, FileContentDesc)
-  } deriving (Generic, Show)
+  } deriving (Generic, Show, Ord, Eq)
 instance Binary InputDesc
 
 data FileDesc ne e
@@ -100,32 +102,21 @@ data OutputDesc = OutputDesc
   } deriving (Generic, Show, Eq)
 instance Binary OutputDesc
 
+-- TODO: naming...
+type FileDescInput = FileDesc Reason (POSIXTime, InputDesc)
+
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
   , elCommand :: ByteString -- Mainly for debugging
-  , elInputsDescs :: Map FilePath (FileDesc Reason (POSIXTime, InputDesc))
+  , elInputsDescs :: Map FilePath FileDescInput
   , elOutputsDescs :: Map FilePath (FileDesc () (POSIXTime, OutputDesc))
   , elStdoutputs :: StdOutputs ByteString
   , elSelfTime :: DiffTime
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-data InputLogStat = InputLogStat
-  { ilsBasicStatEssence      :: BasicStatEssence
-  , ilsFileSize              :: Maybe Posix.FileOffset
-  , ilsFileType              :: Maybe FileType
-  } deriving (Generic, Show, Eq, Ord)
-instance Binary InputLogStat
-
-data InputLog = InputLog
-  { ilModeAccess :: Maybe FileModeDesc
-  , ilStatAccess :: Maybe InputLogStat
-  , ilContentAccess :: Maybe FileContentDesc
-  } deriving (Generic, Show, Eq, Ord)
-instance Binary InputLog
-
 data ExecutionLogTreeInput = ExecutionLogTreeInput
-  { eltiBranches :: NonEmptyMap (FileDesc () InputLog) ExecutionLogTree
+  { eltiBranches :: NonEmptyMap FileDescInput ExecutionLogTree
   } deriving (Generic, Show)
 instance Binary ExecutionLogTreeInput
 
@@ -186,6 +177,12 @@ data IRef a = IRef
   , delIRef :: IO ()
   }
 
+data TargetLogType
+  = TargetLogLatestExecutionLog
+  | TargetLogExecutionLogTree
+  deriving (Show, Eq, Ord, Generic)
+instance Binary TargetLogType
+
 mkIRefKey :: Binary a => ByteString -> Db -> IRef a
 mkIRefKey key db = IRef
   { readIRef = getKey db key
@@ -193,10 +190,15 @@ mkIRefKey key db = IRef
   , delIRef = deleteKey db key
   }
 
+-- TODO: Canonicalize commands (whitespace/etc)
+targetKey :: TargetLogType -> Makefile.Target -> ByteString
+targetKey targetLogType target = MD5.hash $ encode targetLogType <> Makefile.targetCmds target
+
 executionLogTree :: Makefile.Target -> Db -> IRef ExecutionLogTree
-executionLogTree target = mkIRefKey targetKey
-  where
-    targetKey = MD5.hash $ Makefile.targetCmds target -- TODO: Canonicalize commands (whitespace/etc)
+executionLogTree = mkIRefKey . targetKey TargetLogExecutionLogTree
+
+latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLog
+latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
