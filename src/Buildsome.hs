@@ -723,8 +723,10 @@ findApplyExecutionLogTree bte@BuildTargetEnv{..} entity TargetDesc{..} = do
     Left reasons -> do -- Execution log found but didn't match
       printStrLn btePrinter . bsRender bteBuildsome . mconcat $
         [ "No cached execution log of ", cTarget (show (targetOutputs tdTarget))
-        , " matched. Mismatching inputs: "
-        , ColorText.intercalate ", " $ map (\(f,r) -> cPath (show f) <> ": " <> (fromString $ show r)) reasons
+        , " matched. Example mismatching input (one of "
+        , show $ length reasons
+        , " total): "
+        , case head reasons of (file, reason) -> cPath (show file) <> ": " <> (fromString $ show reason)
         ]
       return Nothing
     Right executionLog -> do
