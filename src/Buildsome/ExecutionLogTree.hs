@@ -9,6 +9,7 @@ module Buildsome.ExecutionLogTree
   )
   where
 
+-- REVIEW(Eyal): Can you remove the weird spacing?
 import           Buildsome.Db            (ExecutionLog (..),
                                           ExecutionLogTree (..),
                                           ExecutionLogTreeInput (..),
@@ -44,6 +45,8 @@ andRight (Left x : _) = Left x
 andRight (Right _ : xs) = andRight xs
 
 matchesCurrentFS
+-- REVIEW(Eyal): The :: and => are on the end of previous line
+-- everywhere else
   :: (Functor m, Applicative m, MonadIO m)
   => FilePath -> Maybe Posix.FileStatus -> FileDescInput
   -> m (Either [MismatchReason] ())
@@ -60,6 +63,8 @@ matchesCurrentFS filePath mStat inputDesc =
     ]
 
 compareProp
+-- REVIEW(Eyal): The :: and => are on the end of previous line
+-- everywhere else
  :: (Monad m, Cmp a)
  => Maybe (a1, a) -> m a -> m (Either [MismatchReason] ())
 compareProp prop act =
@@ -72,6 +77,8 @@ compareProp prop act =
           NotEquals r -> return (Left [MismatchFileDiffers r])
 
 firstRightAction
+-- REVIEW(Eyal): The :: and => are on the end of previous line
+-- everywhere else
   :: (Applicative m, Monad m, Functor t, Foldable t, Monoid e)
   => t (m (Either e a)) -> m (Either e a)
 firstRightAction = runEitherT . asum . fmap EitherT
@@ -85,6 +92,13 @@ checkBranches
   => FilePath -> Maybe Posix.FileStatus -> NonEmptyMap.NonEmptyMap FileDescInput b
   -> NonEmptyList (m (Either [(b, MismatchReason)] (FileDescInput, b)))
 checkBranches filePath mStat branches =
+  -- REVIEW(Eyal): Don't use such a complex lambda, make a named
+  -- function in a "where" clause, even if the name is "f"
+  -- REVIEW(Eyal): Maybe instead:
+  --  [ fmap (bimapEither (map (value,)) (const (inputDesc, value)))
+  --    <$> matchesCurrentFS filePath mStat inputDesc
+  --  | (inputDesc, value) <- NonEmptyMap.toNonEmptyList branches
+  --  ]
   fmap (\x -> fmap (bimapEither (map (snd x,)) (const x)) <$> matchesCurrentFS filePath mStat $ fst x)
   $ NonEmptyMap.toNonEmptyList branches
 
@@ -177,16 +191,21 @@ append el = append' (inputsList el, el) []
 showTreeSummary :: ExecutionLogTree -> String
 showTreeSummary = showTreeSummary' ""
 
+-- REVIEW(Eyal): Much more customary to call this "go" in a "where"
+-- clause
 showTreeSummary' :: String -> ExecutionLogTree -> String
 showTreeSummary' _   ExecutionLogLeaf{} = "Leaf"
+-- REVIEW(Eyal): Why "tab" and not "indent"?
 showTreeSummary' tab (ExecutionLogBranch m) =
   mconcat
   [ "\n", tab, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
+-- REVIEW(Eyal): indent, not align
   where
     showInput input ExecutionLogTreeInput{..} =
       case branches of
         []  -> error "can't be empty"
         [x] -> mconcat [show input, showTreeSummary' (t : tab) $ snd x]
         xs  -> concatMap ((mconcat ["\n", t : tab, show input, ":"] ++) . showTreeSummary' (t : tab) . snd) xs
+      -- REVIEW(Eyal): indent, not align
       where branches = NonEmptyMap.toList eltiBranches
     t = ' '
