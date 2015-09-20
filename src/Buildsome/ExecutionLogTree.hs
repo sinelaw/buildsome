@@ -9,14 +9,13 @@ module Buildsome.ExecutionLogTree
   )
   where
 
--- REVIEW(Eyal): Can you remove the weird spacing?
-import           Buildsome.Db            (ExecutionLog (..),
-                                          ExecutionLogTree (..),
-                                          ExecutionLogTreeInput (..),
-                                          FileDesc (..), InputDesc (..),
+import           Buildsome.Db            (ExecutionLog(..),
+                                          ExecutionLogTree(..),
+                                          ExecutionLogTreeInput(..),
+                                          FileDesc(..), InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class  (MonadIO, liftIO)
-import           Control.Monad.Trans.Either (EitherT (..), runEitherT)
+import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
 import           Data.Foldable           (asum)
 import           Data.List               (intercalate)
 import qualified Data.Map                as Map
@@ -44,12 +43,10 @@ andRight [] = Right ()
 andRight (Left x : _) = Left x
 andRight (Right _ : xs) = andRight xs
 
-matchesCurrentFS
--- REVIEW(Eyal): The :: and => are on the end of previous line
--- everywhere else
-  :: (Functor m, Applicative m, MonadIO m)
-  => FilePath -> Maybe Posix.FileStatus -> FileDescInput
-  -> m (Either [MismatchReason] ())
+matchesCurrentFS ::
+  (Functor m, Applicative m, MonadIO m) =>
+  FilePath -> Maybe Posix.FileStatus -> FileDescInput ->
+  m (Either [MismatchReason] ())
 matchesCurrentFS filePath mStat inputDesc =
   case (inputDesc, mStat) of
   (FileDescNonExisting{}, Nothing) -> return $ Right ()
@@ -62,11 +59,9 @@ matchesCurrentFS filePath mStat inputDesc =
     , compareProp (idContentAccess inputFileDesc) (liftIO $ fileContentDescOfStat filePath stat)
     ]
 
-compareProp
--- REVIEW(Eyal): The :: and => are on the end of previous line
--- everywhere else
- :: (Monad m, Cmp a)
- => Maybe (a1, a) -> m a -> m (Either [MismatchReason] ())
+compareProp ::
+  (Monad m, Cmp a) =>
+  Maybe (a1, a) -> m a -> m (Either [MismatchReason] ())
 compareProp prop act =
   maybe (return $ Right ()) check $ fmap snd prop
     where
@@ -76,31 +71,31 @@ compareProp prop act =
           Equals -> return (Right ())
           NotEquals r -> return (Left [MismatchFileDiffers r])
 
-firstRightAction
--- REVIEW(Eyal): The :: and => are on the end of previous line
--- everywhere else
-  :: (Applicative m, Monad m, Functor t, Foldable t, Monoid e)
-  => t (m (Either e a)) -> m (Either e a)
+firstRightAction ::
+  (Applicative m, Monad m, Functor t, Foldable t, Monoid e) =>
+  t (m (Either e a)) -> m (Either e a)
 firstRightAction = runEitherT . asum . fmap EitherT
 
 bimapEither :: (e -> e') -> (a -> a') -> Either e a -> Either e' a'
 bimapEither f _ (Left x)  = Left $ f x
 bimapEither _ g (Right x) = Right $ g x
 
-checkBranches
-  :: (Functor m, Applicative m, MonadIO m)
-  => FilePath -> Maybe Posix.FileStatus -> NonEmptyMap.NonEmptyMap FileDescInput b
-  -> NonEmptyList (m (Either [(b, MismatchReason)] (FileDescInput, b)))
+annotateMatches ::
+  a -> b -> Either [MismatchReason] () ->
+  Either [(b, MismatchReason)] (a, b)
+annotateMatches inputDesc value =
+  bimapEither (map (value,)) (const (inputDesc, value))
+
+checkBranches :: (Functor m, Applicative m, MonadIO m) =>
+  FilePath -> Maybe Posix.FileStatus ->
+  NonEmptyMap.NonEmptyMap FileDescInput b ->
+  NonEmptyList (m (Either [(b, MismatchReason)] (FileDescInput, b)))
 checkBranches filePath mStat branches =
-  -- REVIEW(Eyal): Don't use such a complex lambda, make a named
-  -- function in a "where" clause, even if the name is "f"
-  -- REVIEW(Eyal): Maybe instead:
-  --  [ fmap (bimapEither (map (value,)) (const (inputDesc, value)))
-  --    <$> matchesCurrentFS filePath mStat inputDesc
-  --  | (inputDesc, value) <- NonEmptyMap.toNonEmptyList branches
-  --  ]
-  fmap (\x -> fmap (bimapEither (map (snd x,)) (const x)) <$> matchesCurrentFS filePath mStat $ fst x)
-  $ NonEmptyMap.toNonEmptyList branches
+  fmap mapMatch $ NonEmptyMap.toNonEmptyList branches
+  where
+    mapMatch (inputDesc, value) =
+      annotateMatches inputDesc value <$> matchesCurrentFS filePath mStat inputDesc
+
 
 lookupInput :: FilePath -> ExecutionLogTreeInput -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
 lookupInput filePath ExecutionLogTreeInput{..} = do
@@ -195,17 +190,15 @@ showTreeSummary = showTreeSummary' ""
 -- clause
 showTreeSummary' :: String -> ExecutionLogTree -> String
 showTreeSummary' _   ExecutionLogLeaf{} = "Leaf"
--- REVIEW(Eyal): Why "tab" and not "indent"?
-showTreeSummary' tab (ExecutionLogBranch m) =
+showTreeSummary' indent (ExecutionLogBranch m) =
   mconcat
-  [ "\n", tab, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
--- REVIEW(Eyal): indent, not align
+  [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
   where
     showInput input ExecutionLogTreeInput{..} =
       case branches of
         []  -> error "can't be empty"
-        [x] -> mconcat [show input, showTreeSummary' (t : tab) $ snd x]
-        xs  -> concatMap ((mconcat ["\n", t : tab, show input, ":"] ++) . showTreeSummary' (t : tab) . snd) xs
-      -- REVIEW(Eyal): indent, not align
-      where branches = NonEmptyMap.toList eltiBranches
+        [x] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
+        xs  -> concatMap ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd) xs
+      where
+        branches = NonEmptyMap.toList eltiBranches
     t = ' '
