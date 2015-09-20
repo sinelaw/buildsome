@@ -680,23 +680,6 @@ buildManyWithParReleased mkReason bte@BuildTargetEnv{..} entity slaveRequests =
       slavesFor bte { bteReason = mkReason (inputFilePath req) } req
     Color.Scheme{..} = Color.scheme
 
--- REVIEW(Eyal): This is much simpler/nicer:
---
--- maybeToEither :: e -> Maybe a -> Either e a
--- maybeToEither e = maybe (Left e) Right
---
--- REVIEW(Eyal): And then instead of the liftMaybe function, where it is used as:
---
--- liftMaybe ExecutionLogTree.lookup mExecutionLogTree
---
--- You can use:
--- maybeToEither [] mExecutionLogTree >>= ExecutionLogTree.lookup
---
--- Which is made from simpler primitives
-liftMaybe :: (Applicative m, Monoid e) => (a -> m (Either e b)) -> Maybe a -> m (Either e b)
-liftMaybe _ Nothing = pure $ Left mempty
-liftMaybe f (Just a) = f a
-
 verbosePrint :: BuildTargetEnv -> ColorText -> IO ()
 verbosePrint BuildTargetEnv{..} = whenVerbose bteBuildsome . printStrLn btePrinter . bsRender bteBuildsome
 
@@ -724,8 +707,8 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
 
 findApplyExecutionLogTree :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLogTree bte@BuildTargetEnv{..} entity TargetDesc{..} = do
-  mExecutionLogTree <- readIRef $ Db.executionLogTree tdTarget $ bsDb bteBuildsome
-  mExecutionLog <- liftMaybe ExecutionLogTree.lookup mExecutionLogTree
+  executionLogTree <- maybe (left []) return <$> readIRef (Db.executionLogTree tdTarget $ bsDb bteBuildsome)
+  mExecutionLog <- runEitherT $ executionLogTree >>= EitherT . ExecutionLogTree.lookup
   case mExecutionLog of
     Left [] -> do
       -- no reasons (no mismatching inputs) - this shouldn't happen!

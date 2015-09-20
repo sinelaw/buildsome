@@ -18,8 +18,8 @@ import           Data.Binary    (Binary)
 import           Data.Map       (Map)
 import qualified Data.Map       as Map
 import           GHC.Generics   (Generic)
--- REVIEW(Eyal): Why the space?
-import           Lib.NonEmptyList (NonEmptyList(..))
+import           Lib.NonEmptyList (NonEmptyList)
+import qualified Lib.NonEmptyList as NonEmptyList
 import           Prelude.Compat hiding (lookup)
 
 newtype NonEmptyMap k v = NonEmptyMap (Map k v)
@@ -42,5 +42,5 @@ toList :: NonEmptyMap k v -> [(k, v)]
 toList = Map.toList . toMap
 
 toNonEmptyList :: NonEmptyMap k v -> NonEmptyList (k, v)
-toNonEmptyList nem = NonEmptyList (head l) (tail l)
+toNonEmptyList nem = NonEmptyList.NonEmptyList (head l) (tail l)
   where l = toList nem
