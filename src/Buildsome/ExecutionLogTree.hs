@@ -1,6 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE LambdaCase #-}
 module Buildsome.ExecutionLogTree
   ( lookup
   , append
@@ -10,7 +11,7 @@ module Buildsome.ExecutionLogTree
   where
 
 import           Buildsome.Db            (ExecutionLog(..),
-                                          ExecutionLogTree(..),
+                                          ExecutionLogNode(..), ExecutionLogTree(..),
                                           FileDesc(..), InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
@@ -115,12 +116,13 @@ lookupInput filePath branches = do
     Right (_, elt) -> lookup elt
 
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup (ExecutionLogLeaf el)       = return $ Right el
-lookup (ExecutionLogBranch inputs) =
-  firstRightAction
-  . map (uncurry lookupInput)
-  . NonEmptyMap.toList
-  $ inputs
+lookup tree =
+    case executionLogNode tree of
+    ExecutionLogLeaf el -> return $ Right el
+    ExecutionLogBranch inputs ->
+      firstRightAction
+      . map (uncurry lookupInput)
+      $ NonEmptyMap.toList inputs
 
 inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
 inputsList ExecutionLog{..} = Map.toList elInputsDescs
@@ -129,14 +131,17 @@ fromExecutionLog :: ExecutionLog -> ExecutionLogTree
 fromExecutionLog el = fromExecutionLog' el $ inputsList el
 
 fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTree
-fromExecutionLog' el [] = ExecutionLogLeaf el
-fromExecutionLog' el ((filePath, inputDesc) : inputs) =
-  ExecutionLogBranch
-  . NonEmptyMap.singleton filePath
-  $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
+fromExecutionLog' el =
+    ExecutionLogTree . \case
+    [] -> ExecutionLogLeaf el
+    ((filePath, inputDesc) : inputs) ->
+      ExecutionLogBranch
+      . NonEmptyMap.singleton filePath
+      $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
-append el = go (inputsList el, el) []
+append el =
+  ExecutionLogTree . go (inputsList el, el) [] . executionLogNode
   where
     go ([], new) _ ExecutionLogLeaf{} = ExecutionLogLeaf new
     go ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
@@ -167,7 +172,7 @@ append el = go (inputsList el, el) []
                     NonEmptyMap.insert inputDesc (fromExecutionLog' new is) branches
 
               -- found exact match, go down the tree
-              Just next -> go (is, new) (filePath:oldInputs) next
+              Just next -> go (is, new) (filePath:oldInputs) (executionLogNode next)
 
 showTreeSummary :: ExecutionLogTree -> String
 showTreeSummary = showTreeSummary' ""
@@ -175,17 +180,19 @@ showTreeSummary = showTreeSummary' ""
 -- REVIEW(Eyal): Much more customary to call this "go" in a "where"
 -- clause
 showTreeSummary' :: String -> ExecutionLogTree -> String
-showTreeSummary' _   ExecutionLogLeaf{} = "Leaf"
-showTreeSummary' indent (ExecutionLogBranch m) =
-  mconcat
-  [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
-  where
-    showInput input branches =
-      case NonEmptyMap.toNonEmptyList branches of
-      NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
-      NonEmptyList x xs ->
-          -- TODO: List comprehension with unlines
-          concatMap
-          ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
-          (x:xs)
-    t = ' '
+showTreeSummary' indent (ExecutionLogTree node) =
+  case node of
+  ExecutionLogLeaf{} -> "Leaf"
+  ExecutionLogBranch m ->
+    mconcat
+    [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
+    where
+      showInput input branches =
+        case NonEmptyMap.toNonEmptyList branches of
+        NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
+        NonEmptyList x xs ->
+            -- TODO: List comprehension with unlines
+            concatMap
+            ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
+            (x:xs)
+      t = ' '
