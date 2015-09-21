@@ -11,24 +11,24 @@ module Buildsome.ExecutionLogTree
 
 import           Buildsome.Db            (ExecutionLog(..),
                                           ExecutionLogTree(..),
-                                          ExecutionLogTreeInput(..),
                                           FileDesc(..), InputDesc(..),
                                           FileDescInput)
-import           Control.Monad.IO.Class  (MonadIO, liftIO)
+import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
 
-import           Data.Foldable           (asum)
-import           Data.List               (intercalate)
-import qualified Data.Map                as Map
-import           Lib.Cmp                 (Cmp(..), ComparisonResult(..), Reasons)
-import qualified Lib.Directory           as Dir
+import           Data.Foldable (asum)
+import           Data.List (intercalate)
+import qualified Data.Map as Map
+import           Lib.Cmp (Cmp(..), ComparisonResult(..), Reasons)
+import qualified Lib.Directory as Dir
 import           Lib.FileDesc            (fileContentDescOfStat,
                                           fileModeDescOfStat,
                                           fileStatDescOfStat,
                                           fileStatDescOfStat)
 import           Lib.FilePath (FilePath)
+import           Lib.NonEmptyList (NonEmptyList(..))
+import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.NonEmptyMap as NonEmptyMap
-import           Lib.NonEmptyList (NonEmptyList)
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
 
@@ -97,10 +97,12 @@ checkBranches filePath mStat branches =
       annotateMatches inputDesc value <$> matchesCurrentFS filePath mStat inputDesc
 
 
-lookupInput :: FilePath -> ExecutionLogTreeInput -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookupInput filePath ExecutionLogTreeInput{..} = do
+lookupInput ::
+  FilePath -> NonEmptyMap FileDescInput ExecutionLogTree ->
+  IO (Either [(FilePath, MismatchReason)] ExecutionLog)
+lookupInput filePath branches = do
   mStat <- liftIO $ Dir.getMFileStatus filePath
-  match <- firstRightAction $ checkBranches filePath mStat eltiBranches
+  match <- firstRightAction $ checkBranches filePath mStat branches
   case match of
     -- include the input path in the error, for caller's convenience
     Left results -> do
@@ -131,7 +133,6 @@ fromExecutionLog' el [] = ExecutionLogLeaf el
 fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   ExecutionLogBranch
   . NonEmptyMap.singleton filePath
-  . ExecutionLogTreeInput
   $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
@@ -152,18 +153,18 @@ append el elt' = go (inputsList el, el) elt' []
       = case NonEmptyMap.lookup filePath inputses of
           -- no filepath matching this input at current level
           Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-            where newInput = ExecutionLogTreeInput (NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is)
+            where
+              newInput = NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is
 
           -- found an input with the same file path, need to check
           -- it's filedesc
-          Just ExecutionLogTreeInput{..} ->
-            case NonEmptyMap.lookup inputDesc eltiBranches of
+          Just branches ->
+            case NonEmptyMap.lookup inputDesc branches of
               -- none of the existing filedescs matches what we have
               Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
                 where
                   newInput =
-                    ExecutionLogTreeInput
-                    $ NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches
+                    NonEmptyMap.insert inputDesc (fromExecutionLog' new is) branches
 
               -- found exact match, go down the tree
               Just next -> go (is, new) next (filePath:oldInputs)
@@ -179,11 +180,12 @@ showTreeSummary' indent (ExecutionLogBranch m) =
   mconcat
   [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
   where
-    showInput input ExecutionLogTreeInput{..} =
-      case branches of
-        []  -> error "can't be empty"
-        [x] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
-        xs  -> concatMap ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd) $ xs
-      where
-        branches = NonEmptyMap.toList eltiBranches
+    showInput input branches =
+      case NonEmptyMap.toNonEmptyList branches of
+      NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
+      NonEmptyList x xs ->
+          -- TODO: List comprehension with unlines
+          concatMap
+          ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
+          (x:xs)
     t = ' '
