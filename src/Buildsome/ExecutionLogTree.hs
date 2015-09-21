@@ -1,6 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE LambdaCase #-}
 module Buildsome.ExecutionLogTree
   ( lookup
   , append
@@ -10,7 +11,7 @@ module Buildsome.ExecutionLogTree
   where
 
 import           Buildsome.Db            (ExecutionLog(..),
-                                          ExecutionLogTree(..),
+                                          ExecutionLogNode(..), ExecutionLogTree(..),
                                           FileDesc(..), InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
@@ -114,12 +115,13 @@ lookupInput filePath branches = do
     Right (_, elt) -> lookup elt
 
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup (ExecutionLogLeaf el)       = return $ Right el
-lookup (ExecutionLogBranch inputs) =
-  firstRightAction
-  . map (uncurry lookupInput)
-  . NonEmptyMap.toList
-  $ inputs
+lookup tree =
+    case executionLogNode tree of
+    ExecutionLogLeaf el -> return $ Right el
+    ExecutionLogBranch inputs ->
+      firstRightAction
+      . map (uncurry lookupInput)
+      $ NonEmptyMap.toList inputs
 
 inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
 inputsList ExecutionLog{..} = Map.toList elInputsDescs
@@ -128,11 +130,13 @@ fromExecutionLog :: ExecutionLog -> ExecutionLogTree
 fromExecutionLog el = fromExecutionLog' el $ inputsList el
 
 fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTree
-fromExecutionLog' el [] = ExecutionLogLeaf el
-fromExecutionLog' el ((filePath, inputDesc) : inputs) =
-  ExecutionLogBranch
-  . NonEmptyMap.singleton filePath
-  $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
+fromExecutionLog' el =
+    ExecutionLogTree . \case
+    [] -> ExecutionLogLeaf el
+    ((filePath, inputDesc) : inputs) ->
+      ExecutionLogBranch
+      . NonEmptyMap.singleton filePath
+      $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
 appendToBranch' :: FilePath
                    -> FileDescInput
@@ -140,7 +144,7 @@ appendToBranch' :: FilePath
                    -> ExecutionLog
                    -> [FilePath]
                    -> NonEmptyMap FilePath (NonEmptyMap FileDescInput ExecutionLogTree)
-                   -> ExecutionLogTree
+                   -> ExecutionLogNode ExecutionLogTree
 appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
   case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
@@ -158,12 +162,12 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
               newInput =
                 NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) branches
           -- found exact match, append' down the tree
-          Just next -> append' (nextInputs, new) (filePath:oldInputs) next
+          Just next -> append' (nextInputs, new) (filePath:oldInputs) (executionLogNode next)
 
 append' :: ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
-           -> ExecutionLogTree
-           -> ExecutionLogTree
+           -> ExecutionLogNode ExecutionLogTree
+           -> ExecutionLogNode ExecutionLogTree
 append' ([], new)           _inputs   ExecutionLogLeaf{}
   = ExecutionLogLeaf new
 append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
@@ -180,7 +184,8 @@ append' ((filePath, inputDesc):is, new) oldInputs (ExecutionLogBranch inputses)
   = appendToBranch' filePath inputDesc is new oldInputs inputses
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
-append el = append' (inputsList el, el) []
+append el =
+    ExecutionLogTree . append' (inputsList el, el) [] . executionLogNode
 
 showTreeSummary :: ExecutionLogTree -> String
 showTreeSummary = showTreeSummary' ""
@@ -188,17 +193,19 @@ showTreeSummary = showTreeSummary' ""
 -- REVIEW(Eyal): Much more customary to call this "go" in a "where"
 -- clause
 showTreeSummary' :: String -> ExecutionLogTree -> String
-showTreeSummary' _   ExecutionLogLeaf{} = "Leaf"
-showTreeSummary' indent (ExecutionLogBranch m) =
-  mconcat
-  [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
-  where
-    showInput input branches =
-      case NonEmptyMap.toNonEmptyList branches of
-      NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
-      NonEmptyList x xs ->
-          -- TODO: List comprehension with unlines
-          concatMap
-          ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
-          (x:xs)
-    t = ' '
+showTreeSummary' indent (ExecutionLogTree node) =
+  case node of
+  ExecutionLogLeaf{} -> "Leaf"
+  ExecutionLogBranch m ->
+    mconcat
+    [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
+    where
+      showInput input branches =
+        case NonEmptyMap.toNonEmptyList branches of
+        NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
+        NonEmptyList x xs ->
+            -- TODO: List comprehension with unlines
+            concatMap
+            ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
+            (x:xs)
+      t = ' '
