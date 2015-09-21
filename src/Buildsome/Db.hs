@@ -115,13 +115,13 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-data ExecutionLogNode tree
+data ExecutionLogNode log tree
   = ExecutionLogBranch (NonEmptyMap FilePath (NonEmptyMap FileDescInput tree))
-  | ExecutionLogLeaf ExecutionLog
+  | ExecutionLogLeaf log
   deriving (Generic, Show)
-instance Binary tree => Binary (ExecutionLogNode tree)
+instance (Binary tree, Binary log) => Binary (ExecutionLogNode log tree)
 
-newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: ExecutionLogNode ExecutionLogTree }
+newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: ExecutionLogNode ExecutionLog ExecutionLogTree }
   deriving (Generic, Show)
 instance Binary ExecutionLogTree
 
