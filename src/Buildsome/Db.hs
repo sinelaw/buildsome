@@ -11,7 +11,7 @@ module Buildsome.Db
   , ExecutionLog(..), executionLogTree
   , latestExecutionLog
   , FileDescInput
-  , ExecutionLogTree(..), ExecutionLogTreeInput(..)
+  , ExecutionLogTree(..)
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
   , IRef(..)
@@ -115,13 +115,8 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-data ExecutionLogTreeInput = ExecutionLogTreeInput
-  { eltiBranches :: NonEmptyMap FileDescInput ExecutionLogTree
-  } deriving (Generic, Show)
-instance Binary ExecutionLogTreeInput
-
 data ExecutionLogTree
-  = ExecutionLogBranch (NonEmptyMap FilePath ExecutionLogTreeInput)
+  = ExecutionLogBranch (NonEmptyMap FilePath (NonEmptyMap FileDescInput ExecutionLogTree))
   | ExecutionLogLeaf ExecutionLog
   deriving (Generic, Show)
 instance Binary ExecutionLogTree
