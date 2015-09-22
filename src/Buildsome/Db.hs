@@ -12,7 +12,6 @@ module Buildsome.Db
   , latestExecutionLog
   , FileDescInput
   , ExecutionLogTree(..)
-  , ExecutionLogNode(..)
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
   , IRef(..)
@@ -43,8 +42,8 @@ import           Lib.FilePath (FilePath, (</>), (<.>))
 import           Lib.Makefile (Makefile)
 import qualified Lib.Makefile as Makefile
 import           Lib.Makefile.Monad (PutStrLn)
-import           Lib.NonEmptyMap (NonEmptyMap)
 
+import           Lib.Trie (Trie)
 import           Lib.StdOutputs (StdOutputs(..))
 import           Lib.TimeInstances ()
 import qualified System.Posix.ByteString as Posix
@@ -105,13 +104,7 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-data ExecutionLogNode log tree
-  = ExecutionLogBranch (NonEmptyMap FilePath (NonEmptyMap FileDescInput tree))
-  | ExecutionLogLeaf log
-  deriving (Generic, Show)
-instance (Binary tree, Binary log) => Binary (ExecutionLogNode log tree)
-
-newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: ExecutionLogNode ExecutionLog ExecutionLogTree }
+newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: Trie FilePath FileDescInput ExecutionLog ExecutionLogTree }
   deriving (Generic, Show)
 instance Binary ExecutionLogTree
 
