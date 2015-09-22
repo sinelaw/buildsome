@@ -12,7 +12,7 @@ module Buildsome.ExecutionLogTree
 
 import           Buildsome.Db            (ExecutionLog(..),
                                           ExecutionLogNode(..), ExecutionLogTree(..),
-                                          FileDesc(..), InputDesc(..),
+                                          InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
@@ -22,7 +22,8 @@ import           Data.List (intercalate)
 import qualified Data.Map as Map
 import           Lib.Cmp (Cmp(..), ComparisonResult(..), Reasons)
 import qualified Lib.Directory as Dir
-import           Lib.FileDesc            (fileContentDescOfStat,
+import           Lib.FileDesc            (FileDesc(..),
+                                          fileContentDescOfStat,
                                           fileModeDescOfStat,
                                           fileStatDescOfStat,
                                           fileStatDescOfStat)

@@ -58,7 +58,7 @@ import           Lib.Exception (finally, logErrors, handle, catch, handleSync, p
 import           Lib.FSHook (OutputBehavior(..), OutputEffect(..))
 import qualified Lib.FSHook as FSHook
 import qualified Lib.Fresh as Fresh
-import           Lib.FileDesc (fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
+import           Lib.FileDesc (FileDesc(..), fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
 import           Lib.IORef (atomicModifyIORef'_, atomicModifyIORef_)
@@ -414,7 +414,7 @@ replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfT
   void $ verifyTargetSpec bte inputs outputs target
 
 verifyFileDesc :: (IsString str, MonadIO m) =>
-  BuildTargetEnv -> FilePath -> Db.FileDesc ne (POSIXTime, Db.OutputDesc) ->
+  BuildTargetEnv -> FilePath -> FileDesc ne (POSIXTime, Db.OutputDesc) ->
   (Posix.FileStatus -> Db.OutputDesc -> (EitherT ByteString IO ())) ->
   EitherT str m ()
 verifyFileDesc bte@BuildTargetEnv{..} filePath fileDesc existingVerify = do
@@ -423,8 +423,8 @@ verifyFileDesc bte@BuildTargetEnv{..} filePath fileDesc existingVerify = do
       remove = liftIO . removeFileOrDirectoryOrNothing
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case (mStat, fileDesc) of
-    (Nothing, Db.FileDescNonExisting _) -> return ()
-    (Just stat, Db.FileDescExisting (mtime, desc))
+    (Nothing, FileDescNonExisting _) -> return ()
+    (Just stat, FileDescExisting (mtime, desc))
       | Posix.modificationTimeHiRes stat /= mtime -> do
           res <- liftIO $ runEitherT $ existingVerify stat desc
           case res of
@@ -437,10 +437,10 @@ verifyFileDesc bte@BuildTargetEnv{..} filePath fileDesc existingVerify = do
                 ]
             Right x -> return x
       | otherwise -> return ()
-    (Just _, Db.FileDescNonExisting _)  -> do
+    (Just _, FileDescNonExisting _)  -> do
       remove filePath
       explain "File exists, but shouldn't: removed "
-    (Nothing, Db.FileDescExisting (_, desc)) -> do
+    (Nothing, FileDescExisting (_, desc)) -> do
       restore desc
       explain "File doesn't exist, but should: restored from cache "
   where
@@ -556,7 +556,7 @@ verifyDesc str getDesc oldDesc = do
 
 verifyOutputDescs ::
     MonadIO m => Db -> BuildTargetEnv -> TargetDesc ->
-    Map FilePath (Db.FileDesc ne (POSIXTime, Db.OutputDesc)) ->
+    Map FilePath (FileDesc ne (POSIXTime, Db.OutputDesc)) ->
     EitherT (ByteString, FilePath) m ()
 verifyOutputDescs db bte@BuildTargetEnv{..} TargetDesc{..} esOutputsDescs = do
   -- For now, we don't store the output files' content
@@ -622,12 +622,12 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} inputsDescs
     Color.Scheme{..} = Color.scheme
     hinted = S.fromList $ targetAllInputs tdTarget
     bteImplicit = bte { bteExplicitlyDemanded = False, bteSpeculative = True }
-    fromFileDesc (Db.FileDescNonExisting depReason) =
+    fromFileDesc (FileDescNonExisting depReason) =
       -- The access may be larger than mode-only, but we only need to
       -- know if it exists or not because we only need to know whether
       -- the execution log will be re-used or not, not more.
       Just (depReason, FSHook.AccessTypeModeOnly)
-    fromFileDesc (Db.FileDescExisting (_mtime, inputDesc)) =
+    fromFileDesc (FileDescExisting (_mtime, inputDesc)) =
       case inputDesc of
       Db.InputDesc { Db.idContentAccess = Just (depReason, _) } ->
         Just (depReason, FSHook.AccessTypeFull)
@@ -998,7 +998,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
       mStat <- Dir.getMFileStatus outPath
       fileDesc <-
         case mStat of
-        Nothing -> return $ Db.FileDescNonExisting ()
+        Nothing -> return $ FileDescNonExisting ()
         Just stat -> do
           mContentDesc <-
             if Posix.isDirectory stat
@@ -1021,7 +1021,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
                 _ -> return ()
               return $ Just chash
           let mtime = Posix.modificationTimeHiRes stat
-          return $ Db.FileDescExisting
+          return $ FileDescExisting
             (mtime, Db.OutputDesc (fileStatDescOfStat stat) mContentDesc)
       return (outPath, fileDesc)
   return Db.ExecutionLog
@@ -1040,14 +1040,14 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
     inputAccess ::
       FilePath ->
       (Map FSHook.AccessType Reason, Maybe Posix.FileStatus) ->
-      IO (Db.FileDesc Reason (POSIXTime, Db.InputDesc))
+      IO (FileDesc Reason (POSIXTime, Db.InputDesc))
     inputAccess path (accessTypes, Nothing) = do
       let reason =
             case M.elems accessTypes of
             [] -> error $ "AccessTypes empty in rcrInputs:" ++ show path
             x:_ -> x
       assertFileMTime path Nothing
-      return $ Db.FileDescNonExisting reason
+      return $ FileDescNonExisting reason
     inputAccess path (accessTypes, Just stat) = do
       assertFileMTime path $ Just stat
       let
@@ -1062,7 +1062,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
       contentAccess <-
         addDesc FSHook.AccessTypeFull $
         fileContentDescOfStat "When making execution log (input)" db path stat
-      return $ Db.FileDescExisting
+      return $ FileDescExisting
         ( Posix.modificationTimeHiRes stat
         , Db.InputDesc
           { Db.idModeAccess = modeAccess
@@ -1181,7 +1181,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
                       PutInputsInStats ->
                           Just $ concat
                           [ targetAllInputs tdTarget
-                          , [ path | (path, Db.FileDescExisting _) <- M.toList elInputsDescs ]
+                          , [ path | (path, FileDescExisting _) <- M.toList elInputsDescs ]
                           ]
                       Don'tPutInputsInStats -> Nothing
                     }
