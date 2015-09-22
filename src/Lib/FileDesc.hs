@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# OPTIONS -fno-warn-orphans #-}
 {-# LANGUAGE DeriveGeneric, DeriveDataTypeable, NoMonomorphismRestriction, OverloadedStrings #-}
@@ -14,6 +17,8 @@ module Lib.FileDesc
   , BasicStatEssence(..)
   , FullStatEssence(..)
   , fullStatEssenceOfStat
+
+  , FileDesc(..), bimapFileDesc
   ) where
 
 
@@ -162,3 +167,13 @@ fileContentDescOfStat path stat
   | Posix.isSymbolicLink stat =
     FileContentDescSymlink <$> Posix.readSymbolicLink path
   | otherwise = E.throwIO $ UnsupportedFileTypeError path
+
+data FileDesc ne e
+  = FileDescNonExisting ne
+  | FileDescExisting e
+  deriving (Generic, Eq, Ord, Show, Functor, Foldable, Traversable)
+instance (Binary ne, Binary e) => Binary (FileDesc ne e)
+
+bimapFileDesc :: (ne -> ne') -> (e -> e') -> FileDesc ne e -> FileDesc ne' e'
+bimapFileDesc f _ (FileDescNonExisting x) = FileDescNonExisting (f x)
+bimapFileDesc _ g (FileDescExisting x) = FileDescExisting (g x)
