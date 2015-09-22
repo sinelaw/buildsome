@@ -6,7 +6,7 @@
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
-  , InputDesc(..), FileDesc(..), bimapFileDesc
+  , InputDesc(..)
   , OutputDesc(..)
   , ExecutionLog(..), executionLogTree
   , latestExecutionLog
@@ -38,7 +38,7 @@ import           Lib.Binary (encode, decode)
 import           Lib.Directory (catchDoesNotExist, createDirectories, makeAbsolutePath)
 import           Lib.Exception (bracket)
 import qualified Lib.FSHook as FSHook
-import           Lib.FileDesc (FileContentDesc, FileModeDesc, FileStatDesc)
+import           Lib.FileDesc (FileDesc(..), FileContentDesc, FileModeDesc, FileStatDesc)
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import           Lib.Makefile (Makefile)
 import qualified Lib.Makefile as Makefile
@@ -85,16 +85,6 @@ data InputDesc = InputDesc
   , idContentAccess :: Maybe (Reason, FileContentDesc)
   } deriving (Generic, Show, Ord, Eq)
 instance Binary InputDesc
-
-data FileDesc ne e
-  = FileDescNonExisting ne
-  | FileDescExisting e
-  deriving (Generic, Eq, Ord, Show, Functor, Foldable, Traversable)
-instance (Binary ne, Binary e) => Binary (FileDesc ne e)
-
-bimapFileDesc :: (ne -> ne') -> (e -> e') -> FileDesc ne e -> FileDesc ne' e'
-bimapFileDesc f _ (FileDescNonExisting x) = FileDescNonExisting (f x)
-bimapFileDesc _ g (FileDescExisting x) = FileDescExisting (g x)
 
 data OutputDesc = OutputDesc
   { odStatDesc :: FileStatDesc

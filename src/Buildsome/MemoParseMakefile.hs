@@ -10,7 +10,7 @@ import Buildsome.FileContentDescCache (fileContentDescOfStat)
 
 import Control.DeepSeq (rnf)
 import Data.Map (Map)
-import Lib.FileDesc (FileContentDesc)
+import Lib.FileDesc (FileDesc(..), FileContentDesc)
 import Lib.FilePath (FilePath)
 import Lib.Makefile (Makefile, Vars)
 import qualified Buildsome.Db as Db
@@ -22,13 +22,13 @@ import qualified Lib.Makefile as Makefile
 import qualified Lib.Makefile.Monad as MakefileMonad
 import qualified System.Posix.ByteString as Posix
 
-mkFileDesc :: Db -> FilePath -> Maybe Posix.FileStatus -> IO (Db.FileDesc () FileContentDesc)
-mkFileDesc _ _ Nothing = return $ Db.FileDescNonExisting ()
+mkFileDesc :: Db -> FilePath -> Maybe Posix.FileStatus -> IO (FileDesc () FileContentDesc)
+mkFileDesc _ _ Nothing = return $ FileDescNonExisting ()
 mkFileDesc db path (Just stat) =
-  Db.FileDescExisting <$>
+  FileDescExisting <$>
   fileContentDescOfStat "When parsing Makefile" db path stat
 
-parse :: Db -> FilePath -> Vars -> IO (Map FilePath (Db.FileDesc () FileContentDesc), [MakefileMonad.PutStrLn], Makefile)
+parse :: Db -> FilePath -> Vars -> IO (Map FilePath (FileDesc () FileContentDesc), [MakefileMonad.PutStrLn], Makefile)
 parse db absMakefilePath vars = do
   (readFiles, putStrLns, res) <-
     MakefileMonad.runM $
