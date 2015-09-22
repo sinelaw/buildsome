@@ -11,7 +11,7 @@ module Buildsome.ExecutionLogTree
   where
 
 import           Buildsome.Db            (ExecutionLog(..),
-                                          ExecutionLogNode(..), ExecutionLogTree(..),
+                                          ExecutionLogTree(..),
                                           InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
@@ -31,6 +31,7 @@ import           Lib.FilePath (FilePath)
 import           Lib.NonEmptyList (NonEmptyList(..))
 import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.NonEmptyMap as NonEmptyMap
+import qualified Lib.Trie as Trie
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
 
@@ -119,8 +120,8 @@ lookupInput filePath branches = do
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
 lookup tree =
     case executionLogNode tree of
-    ExecutionLogLeaf el -> return $ Right el
-    ExecutionLogBranch inputs ->
+    Trie.Leaf el -> return $ Right el
+    Trie.Branch inputs ->
       firstRightAction
       . map (uncurry lookupInput)
       $ NonEmptyMap.toList inputs
@@ -134,9 +135,9 @@ fromExecutionLog el = fromExecutionLog' el $ inputsList el
 fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTree
 fromExecutionLog' el =
     ExecutionLogTree . \case
-    [] -> ExecutionLogLeaf el
+    [] -> Trie.Leaf el
     ((filePath, inputDesc) : inputs) ->
-      ExecutionLogBranch
+      Trie.Branch
       . NonEmptyMap.singleton filePath
       $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
@@ -144,8 +145,8 @@ append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el =
   ExecutionLogTree . go (inputsList el, el) [] . executionLogNode
   where
-    go ([], new) _ ExecutionLogLeaf{} = ExecutionLogLeaf new
-    go ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
+    go ([], new) _ Trie.Leaf{} = Trie.Leaf new
+    go ((filePath,_):_, _) oldInputs Trie.Leaf{}
       = error $ intercalate "\n\t"
         [ "Existing execution log with no further inputs exists, but new one has more inputs!"
         , "Target: ", show $ elOutputsDescs el
@@ -153,12 +154,12 @@ append el =
         , "Example extra input: ", show filePath
         , "Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
         ]
-    go ([], _) _ ExecutionLogBranch{}
+    go ([], _) _ Trie.Branch{}
       = error "Existing execution log has more inputs, but new one has no further inputs!"
-    go ((filePath, inputDesc) : is, new) oldInputs (ExecutionLogBranch inputses)
+    go ((filePath, inputDesc) : is, new) oldInputs (Trie.Branch inputses)
       = case NonEmptyMap.lookup filePath inputses of
           -- no filepath matching this input at current level
-          Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
+          Nothing -> Trie.Branch $ NonEmptyMap.insert filePath newInput inputses
             where
               newInput = NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is
 
@@ -167,7 +168,7 @@ append el =
           Just branches ->
             case NonEmptyMap.lookup inputDesc branches of
               -- none of the existing filedescs matches what we have
-              Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
+              Nothing -> Trie.Branch $ NonEmptyMap.insert filePath newInput inputses
                 where
                   newInput =
                     NonEmptyMap.insert inputDesc (fromExecutionLog' new is) branches
@@ -183,8 +184,8 @@ showTreeSummary = showTreeSummary' ""
 showTreeSummary' :: String -> ExecutionLogTree -> String
 showTreeSummary' indent (ExecutionLogTree node) =
   case node of
-  ExecutionLogLeaf{} -> "Leaf"
-  ExecutionLogBranch m ->
+  Trie.Leaf{} -> "Leaf"
+  Trie.Branch m ->
     mconcat
     [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
     where
