@@ -6,7 +6,6 @@ module Buildsome.ExecutionLogTree
   ( lookup
   , append
   , fromExecutionLog
-  , showTreeSummary
   )
   where
 
@@ -191,25 +190,3 @@ append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el =
     ExecutionLogTree . append' (inputsList el, el) [] . executionLogNode
 
-showTreeSummary :: ExecutionLogTree -> String
-showTreeSummary = showTreeSummary' ""
-
--- REVIEW(Eyal): Much more customary to call this "go" in a "where"
--- clause
-showTreeSummary' :: String -> ExecutionLogTree -> String
-showTreeSummary' indent (ExecutionLogTree node) =
-  case node of
-  Trie.Leaf{} -> "Leaf"
-  Trie.Branch m ->
-    mconcat
-    [ "\n", indent, ('>' :) . concatMap (uncurry showInput) $ NonEmptyMap.toList m ]
-    where
-      showInput input branches =
-        case NonEmptyMap.toNonEmptyList branches of
-        NonEmptyList x [] -> mconcat [show input, showTreeSummary' (t : indent) $ snd x]
-        NonEmptyList x xs ->
-            -- TODO: List comprehension with unlines
-            concatMap
-            ((mconcat ["\n", t : indent, show input, ":"] ++) . showTreeSummary' (t : indent) . snd)
-            (x:xs)
-      t = ' '
