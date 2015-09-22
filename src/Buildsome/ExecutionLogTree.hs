@@ -12,7 +12,7 @@ module Buildsome.ExecutionLogTree
 
 import           Buildsome.Db            (ExecutionLog(..),
                                           ExecutionLogNode(..), ExecutionLogTree(..),
-                                          FileDesc(..), InputDesc(..),
+                                          InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
@@ -21,7 +21,8 @@ import           Data.List (intercalate)
 import qualified Data.Map as Map
 import           Lib.Cmp (Cmp(..), ComparisonResult(..), Reasons)
 import qualified Lib.Directory as Dir
-import           Lib.FileDesc            (fileContentDescOfStat,
+import           Lib.FileDesc            (FileDesc(..),
+                                          fileContentDescOfStat,
                                           fileModeDescOfStat,
                                           fileStatDescOfStat,
                                           fileStatDescOfStat)
@@ -144,7 +145,7 @@ appendToBranch' :: FilePath
                    -> ExecutionLog
                    -> [FilePath]
                    -> NonEmptyMap FilePath (NonEmptyMap FileDescInput ExecutionLogTree)
-                   -> ExecutionLogNode ExecutionLogTree
+                   -> ExecutionLogNode ExecutionLog ExecutionLogTree
 appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
   case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
@@ -166,8 +167,8 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
 
 append' :: ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
-           -> ExecutionLogNode ExecutionLogTree
-           -> ExecutionLogNode ExecutionLogTree
+           -> ExecutionLogNode log ExecutionLogTree
+           -> ExecutionLogNode ExecutionLog ExecutionLogTree
 append' ([], new)           _inputs   ExecutionLogLeaf{}
   = ExecutionLogLeaf new
 append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
