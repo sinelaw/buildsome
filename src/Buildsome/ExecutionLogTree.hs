@@ -14,8 +14,6 @@ import           Buildsome.Db            (ExecutionLog(..),
                                           InputDesc(..),
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
-import           Data.Foldable (asum)
 import           Data.List (intercalate)
 import qualified Data.Map as Map
 import           Lib.Cmp (Cmp(..), ComparisonResult(..), Reasons)
@@ -26,9 +24,8 @@ import           Lib.FileDesc            (FileDesc(..),
                                           fileStatDescOfStat,
                                           fileStatDescOfStat)
 import           Lib.FilePath (FilePath)
-import           Lib.NonEmptyList (NonEmptyList(..))
-import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.NonEmptyMap as NonEmptyMap
+import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.Trie as Trie
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
@@ -72,57 +69,8 @@ compareProp prop act =
           Equals -> return (Right ())
           NotEquals r -> return (Left [MismatchFileDiffers r])
 
-firstRightAction ::
-  (Applicative m, Monad m, Functor t, Foldable t, Monoid e) =>
-  t (m (Either e a)) -> m (Either e a)
-firstRightAction = runEitherT . asum . fmap EitherT
-
-bimapEither :: (e -> e') -> (a -> a') -> Either e a -> Either e' a'
-bimapEither f _ (Left x)  = Left $ f x
-bimapEither _ g (Right x) = Right $ g x
-
-annotateMatches ::
-  a -> b -> Either [MismatchReason] () ->
-  Either [(b, MismatchReason)] (a, b)
-annotateMatches inputDesc value =
-  bimapEither (map (value,)) (const (inputDesc, value))
-
-checkBranches :: (Functor m, Applicative m, MonadIO m) =>
-  FilePath -> Maybe Posix.FileStatus ->
-  NonEmptyMap.NonEmptyMap FileDescInput b ->
-  NonEmptyList (m (Either [(b, MismatchReason)] (FileDescInput, b)))
-checkBranches filePath mStat branches =
-  fmap mapMatch $ NonEmptyMap.toNonEmptyList branches
-  where
-    mapMatch (inputDesc, value) =
-      annotateMatches inputDesc value <$> matchesCurrentFS filePath mStat inputDesc
-
-
-lookupInput ::
-  FilePath -> NonEmptyMap FileDescInput ExecutionLogTree ->
-  IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookupInput filePath branches = do
-  mStat <- liftIO $ Dir.getMFileStatus filePath
-  match <- firstRightAction $ checkBranches filePath mStat branches
-  case match of
-    -- include the input path in the error, for caller's convenience
-    Left results -> do
-      branchResults <- mapM (lookup . fst) results
-      return
-        $ Left
-        . ((map ((filePath, ) . snd) results) ++)
-        $ mconcat $ map (either id (const [])) branchResults
-
-    Right (_, elt) -> lookup elt
-
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup tree =
-    case executionLogNode tree of
-    Trie.Leaf el -> return $ Right el
-    Trie.Branch inputs ->
-      firstRightAction
-      . map (uncurry lookupInput)
-      $ NonEmptyMap.toList inputs
+lookup = Trie.lookup executionLogNode (liftIO . Dir.getMFileStatus) matchesCurrentFS
 
 inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
 inputsList ExecutionLog{..} = Map.toList elInputsDescs
