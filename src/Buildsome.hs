@@ -412,11 +412,11 @@ replayExecutionLog bte@BuildTargetEnv{..} target inputs outputs stdOutputs selfT
   -- execution log, so all outputs keep no old content
   void $ verifyTargetSpec bte inputs outputs target
 
-verifyFileDesc :: (IsString str, MonadIO m) =>
+verifyOutputDesc :: (IsString str, MonadIO m) =>
   BuildTargetEnv -> FilePath -> FileDesc ne (POSIXTime, Db.OutputDesc) ->
   (Posix.FileStatus -> Db.OutputDesc -> (EitherT ByteString IO ())) ->
   EitherT str m ()
-verifyFileDesc bte@BuildTargetEnv{..} filePath fileDesc existingVerify = do
+verifyOutputDesc bte@BuildTargetEnv{..} filePath fileDesc existingVerify = do
   let restore (Db.OutputDesc oldStatDesc oldMContentDesc) =
         ContentCache.refreshFromContentCache bte filePath oldMContentDesc (Just oldStatDesc)
       remove = liftIO . removeFileOrDirectoryOrNothing
@@ -563,13 +563,43 @@ verifyOutputDescs db bte@BuildTargetEnv{..} TargetDesc{..} esOutputsDescs = do
   -- the output content is still correct
   forM_ (M.toList esOutputsDescs) $ \(filePath, outputDesc) -> do
       annotateError filePath $
-        verifyFileDesc bte filePath outputDesc $
+        verifyOutputDesc bte filePath outputDesc $
         \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
               verifyDesc "output(stat)" (return (fileStatDescOfStat stat)) oldStatDesc
               verifyMDesc "output(content)"
                 (fileContentDescOfStat "When applying execution log (output)"
                  db filePath stat) oldMContentDesc
 
+verifyFileDesc ::
+  (IsString str, Monoid str, MonadIO m) =>
+  str -> FilePath -> FileDesc ne desc ->
+  (Posix.FileStatus -> desc -> EitherT str m ()) ->
+  EitherT str m ()
+verifyFileDesc str filePath fileDesc existingVerify = do
+  mStat <- liftIO $ Dir.getMFileStatus filePath
+  case (mStat, fileDesc) of
+    (Nothing, FileDescNonExisting _) -> return ()
+    (Just stat, FileDescExisting desc) -> existingVerify stat desc
+    (Just _, FileDescNonExisting _)  -> left (str <> " file did not exist, now exists")
+    (Nothing, FileDescExisting {}) -> left (str <> " file was deleted")
+
+verifyInputDescs ::
+  MonadIO f =>
+  Db -> BuildTargetEnv -> TargetDesc ->
+  Map FilePath (FileDesc ne (POSIXTime, Db.InputDesc)) ->
+  EitherT (ByteString, FilePath) f ()
+verifyInputDescs db BuildTargetEnv{..} TargetDesc{..} elInputsDescs = do
+  forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
+    annotateError filePath $
+      verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
+        when (Posix.modificationTimeHiRes stat /= mtime) $ do
+          let verify str getDesc mPair =
+                verifyMDesc ("input(" <> str <> ")") getDesc $ snd <$> mPair
+          verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
+          verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
+          verifyMDesc "content"
+            (fileContentDescOfStat "When applying execution log (input)"
+             db filePath stat) $ fmap snd mContentAccess
 
 -- executionSummaryVerifyFilesState ::
 --   MonadIO m =>
@@ -590,6 +620,7 @@ executionLogVerifyFilesState ::
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
 executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
+  verifyInputDescs db bte TargetDesc{..} elInputsDescs
   verifyOutputDescs db bte TargetDesc{..} elOutputsDescs
   liftIO $
     replayExecutionLog bte tdTarget
