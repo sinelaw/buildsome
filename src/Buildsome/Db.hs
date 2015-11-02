@@ -8,7 +8,7 @@ module Buildsome.Db
   , registeredOutputsRef, leakedOutputsRef
   , InputDesc(..)
   , OutputDesc(..)
-  , ExecutionLog(..), executionLogTree
+  , ExecutionLog(..), executionLogTree, executionLogTreeNode
   , latestExecutionLog
   , FileDescInput
   , ExecutionLogTree(..)
@@ -104,9 +104,9 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: Trie FilePath FileDescInput ExecutionLog ExecutionLogTree }
-  deriving (Generic, Show)
-instance Binary ExecutionLogTree
+newtype ExecutionLogTree t = ExecutionLogTree { executionLogNode :: Trie FilePath FileDescInput ExecutionLog t }
+  deriving (Generic, Show, Functor, Foldable, Traversable)
+instance Binary a => Binary (ExecutionLogTree a)
 
 registeredOutputsRef :: Db -> IORef (Set FilePath)
 registeredOutputsRef = dbRegisteredOutputs
@@ -172,15 +172,22 @@ mkIRefKey key db = IRef
   , delIRef = deleteKey db key
   }
 
+newtype ELTKey = ELTKey { getELTKey :: ByteString }
+  deriving (Show, Eq, Ord, Generic)
+instance Binary ELTKey
+
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> ByteString
 targetKey targetLogType target = MD5.hash $ encode targetLogType <> Makefile.targetCmds target
 
-executionLogTree :: Makefile.Target -> Db -> IRef ExecutionLogTree
+executionLogTree :: Makefile.Target -> Db -> IRef (ExecutionLogTree ELTKey)
 executionLogTree = mkIRefKey . targetKey TargetLogExecutionLogTree
 
 latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLog
 latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
+
+executionLogTreeNode :: ELTKey -> Db -> IRef (ExecutionLogTree ELTKey)
+executionLogTreeNode = mkIRefKey . getELTKey
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey

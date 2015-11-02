@@ -16,6 +16,7 @@ import           Lib.NonEmptyList (NonEmptyList(..))
 import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.NonEmptyMap as NonEmptyMap
 
+import           Control.Monad (join)
 import           Data.Foldable (asum)
 import           Control.Monad.Trans.Either (EitherT(..), runEitherT)
 import           Data.Binary (Binary)
@@ -83,10 +84,10 @@ checkBranches checkMatch filePath mStat branches =
 
 lookupLeaf ::
   (Functor m, Applicative m, Monad m) =>
-  (tree -> Trie key keyDesc value tree)
+  (tree -> Trie key keyDesc value (m tree))
   -> (key -> m keyResult)
   -> (key -> keyResult -> keyDesc -> m (Either [reason] ()))
-  -> (key, NonEmptyMap keyDesc tree)
+  -> (key, NonEmptyMap keyDesc (m tree))
   -> m (Either [(key, reason)] value)
 lookupLeaf unfix branchAct checkMatch (key, branches) = do
   keyResult <- branchAct key
@@ -97,15 +98,15 @@ lookupLeaf unfix branchAct checkMatch (key, branches) = do
         Left
         . (map ((key, ) . snd) results ++)
         . mconcat . map (either id (const []))
-        <$> traverse (lookup' . fst) results
+        <$> traverse (join . fmap lookup' . fst) results
 
-    Right (_, elt) -> lookup' elt
+    Right (_, elt) -> join $ fmap lookup' elt
   where
     lookup' = lookup unfix branchAct checkMatch
 
 lookup ::
   (Applicative m, Monad m) =>
-  (tree -> Trie key keyDesc value tree)
+  (tree -> Trie key keyDesc value (m tree))
   -> (key -> m keyResult)
   -> (key -> keyResult -> keyDesc -> m (Either [reason] ()))
   -> tree
