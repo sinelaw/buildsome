@@ -11,7 +11,7 @@ module Buildsome.ExecutionLogTree
 
 import           Buildsome.Db            (ExecutionLog(..),
                                           ExecutionLogTree(..),
-                                          InputDesc(..),
+                                          InputDesc(..), executionLogTreeNode,
                                           FileDescInput)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Data.List (intercalate)
@@ -25,6 +25,7 @@ import           Lib.FileDesc            (FileDesc(..),
                                           fileStatDescOfStat)
 import           Lib.FilePath (FilePath)
 import qualified Lib.NonEmptyMap as NonEmptyMap
+import           Lib.NonEmptyMap (NonEmptyMap)
 import qualified Lib.Trie as Trie
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
@@ -68,33 +69,37 @@ compareProp prop act =
           Equals -> return (Right ())
           NotEquals r -> return (Left [MismatchFileDiffers r])
 
-lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup = Trie.lookup executionLogNode (liftIO . Dir.getMFileStatus) matchesCurrentFS
+data ExecutionLogTreeRef m
+  = ExecutionLogTreeRef { unELTRef :: ExecutionLogTree (m (ExecutionLogTreeRef m)) }
+
+lookup :: MonadIO m => ExecutionLogTreeRef m -> m (Either [(FilePath, MismatchReason)] ExecutionLog)
+lookup = Trie.lookup (executionLogNode . unELTRef) (liftIO . Dir.getMFileStatus) matchesCurrentFS
 
 inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
 inputsList ExecutionLog{..} = Map.toList elInputsDescs
 
-fromExecutionLog :: ExecutionLog -> ExecutionLogTree
+fromExecutionLog :: Monad m => ExecutionLog -> ExecutionLogTreeRef m
 fromExecutionLog el = fromExecutionLog' el $ inputsList el
 
-fromExecutionLog' :: ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTree
+fromExecutionLog' :: Monad m => ExecutionLog -> [(FilePath, FileDescInput)] -> ExecutionLogTreeRef m
 fromExecutionLog' el =
-    ExecutionLogTree . \case
+    ExecutionLogTreeRef. ExecutionLogTree . \case
     [] -> Trie.Leaf el
     ((filePath, inputDesc) : inputs) ->
       Trie.Branch
       . NonEmptyMap.singleton filePath
-      $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
+      $ NonEmptyMap.singleton inputDesc (return $ fromExecutionLog' el inputs)
 
 type ExecutionLogNode log tree = Trie.Trie FilePath FileDescInput log tree
 
-appendToBranch' :: FilePath
+appendToBranch' :: Monad m =>
+                   FilePath
                    -> FileDescInput
                    -> [(FilePath, FileDescInput)]
                    -> ExecutionLog
                    -> [FilePath]
-                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput ExecutionLogTree)
-                   -> ExecutionLogNode ExecutionLog ExecutionLogTree
+                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput (ExecutionLogTreeRef m))
+                   -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
 appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
   case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
@@ -110,14 +115,15 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
           Nothing -> Trie.Branch $ NonEmptyMap.insert filePath newInput inputses
             where
               newInput =
-                NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) branches
+                NonEmptyMap.insert inputDesc (return . fromExecutionLog' new nextInputs) branches
           -- found exact match, append' down the tree
-          Just next -> append' (nextInputs, new) (filePath:oldInputs) (executionLogNode next)
+          Just next -> append' (nextInputs, new) (filePath:oldInputs) (executionLogNode $ unELTRef next)
 
-append' :: ([(FilePath, FileDescInput)], ExecutionLog)
+append' :: Monad m =>
+           ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
-           -> ExecutionLogNode log ExecutionLogTree
-           -> ExecutionLogNode ExecutionLog ExecutionLogTree
+           -> ExecutionLogNode log (m (ExecutionLogTreeRef m))
+           -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
 append' ([], new)           _inputs   Trie.Leaf{}
   = Trie.Leaf new
 append' ((filePath,_):_, _) oldInputs Trie.Leaf{}
@@ -133,7 +139,9 @@ append' ([], _)             _inputs   Trie.Branch{}
 append' ((filePath, inputDesc):is, new) oldInputs (Trie.Branch inputses)
   = appendToBranch' filePath inputDesc is new oldInputs inputses
 
-append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
+--append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el =
-    ExecutionLogTree . append' (inputsList el, el) [] . executionLogNode
+    ExecutionLogTreeRef . ExecutionLogTree
+    . append' (inputsList el, el) []
+    . executionLogNode . unELTRef
 
