@@ -136,20 +136,20 @@ fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
 append' :: ([(FilePath, FileDesc () InputLog)], ExecutionLog)
-           -> ExecutionLogTree
            -> [FilePath]
            -> ExecutionLogTree
-append' ([], new) ExecutionLogLeaf{} _ = ExecutionLogLeaf new
-append' ((filePath,_):_, _) (ExecutionLogLeaf{}) oldInputs
+           -> ExecutionLogTree
+append' ([], new)           _inputs   ExecutionLogLeaf{} = ExecutionLogLeaf new
+append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
   = error $ concat
     [ "Existing execution log with no further inputs exists, but new one has more inputs!"
 --    , "\n\t Target: ", show $ elCommand el
     , "\n\t Example extra input: ", show filePath
     , "\n\t Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
     ]
-append' ([], _) (ExecutionLogBranch{}) _
+append' ([], _)             _inputs   ExecutionLogBranch{}
   = error "Existing execution log has more inputs, but new one has no further inputs!"
-append' ((filePath, inputDesc) : is, new) (ExecutionLogBranch inputses) oldInputs
+append' ((filePath, inputDesc):is, new) oldInputs (ExecutionLogBranch inputses)
   = case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
       Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
@@ -164,8 +164,8 @@ append' ((filePath, inputDesc) : is, new) (ExecutionLogBranch inputses) oldInput
             where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches)
 
           -- found exact match, append' down the tree
-          Just next -> append' (is, new) next (filePath:oldInputs)
+          Just next -> append' (is, new) (filePath:oldInputs) next
 
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
-append el elt' = append' (getInputLogs el, el) elt' []
+append el = append' (getInputLogs el, el) []
