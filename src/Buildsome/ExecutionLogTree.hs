@@ -98,13 +98,14 @@ appendToBranch' :: Monad m =>
                    -> [(FilePath, FileDescInput)]
                    -> ExecutionLog
                    -> [FilePath]
-                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput (m (ExecutionLogTreeRef m)))
-                   -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
+                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput (ExecutionLogTreeRef m))
+                   -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
 appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
   case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
       Nothing -> Trie.Branch $ NonEmptyMap.insert filePath newInput inputses
         where
+          -- newInput :: NonEmptyMap FileDescInput (ExecutionLogTreeRef m)
           newInput = NonEmptyMap.singleton inputDesc $ fromExecutionLog' new nextInputs
 
       -- found an input with the same file path, need to check
@@ -124,8 +125,8 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
 append' :: Monad m =>
            ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
-           -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
-           -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
+           -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
+           -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
 append' ([], new)           _inputs   Trie.Leaf{}
   = Trie.Leaf new
 append' ((filePath,_):_, _) oldInputs Trie.Leaf{}
