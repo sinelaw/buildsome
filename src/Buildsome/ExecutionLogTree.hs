@@ -31,6 +31,7 @@ import           Lib.FileDesc            (FileStatDesc (..),
                                           fileStatDescOfStat)
 import           Lib.FilePath (FilePath)
 import qualified Lib.NonEmptyMap as NonEmptyMap
+import           Lib.NonEmptyMap (NonEmptyMap)
 import           Prelude.Compat hiding (FilePath, lookup)
 import qualified System.Posix.ByteString as Posix
 
@@ -135,11 +136,36 @@ fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   . ExecutionLogTreeInput
   $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
+appendToBranch' :: FilePath
+                   -> FileDesc () InputLog
+                   -> [(FilePath, FileDesc () InputLog)]
+                   -> ExecutionLog
+                   -> [FilePath]
+                   -> NonEmptyMap FilePath ExecutionLogTreeInput
+                   -> ExecutionLogTree
+appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
+  case NonEmptyMap.lookup filePath inputses of
+      -- no filepath matching this input at current level
+      Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
+        where newInput = ExecutionLogTreeInput (NonEmptyMap.singleton inputDesc $ fromExecutionLog' new nextInputs)
+
+      -- found an input with the same file path, need to check
+      -- it's filedesc
+      Just (ExecutionLogTreeInput{..}) ->
+        case NonEmptyMap.lookup inputDesc eltiBranches of
+          -- none of the existing filedescs matches what we have
+          Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
+            where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) eltiBranches)
+
+          -- found exact match, append' down the tree
+          Just next -> append' (nextInputs, new) (filePath:oldInputs) next
+
 append' :: ([(FilePath, FileDesc () InputLog)], ExecutionLog)
            -> [FilePath]
            -> ExecutionLogTree
            -> ExecutionLogTree
-append' ([], new)           _inputs   ExecutionLogLeaf{} = ExecutionLogLeaf new
+append' ([], new)           _inputs   ExecutionLogLeaf{}
+  = ExecutionLogLeaf new
 append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
   = error $ concat
     [ "Existing execution log with no further inputs exists, but new one has more inputs!"
@@ -150,22 +176,7 @@ append' ((filePath,_):_, _) oldInputs ExecutionLogLeaf{}
 append' ([], _)             _inputs   ExecutionLogBranch{}
   = error "Existing execution log has more inputs, but new one has no further inputs!"
 append' ((filePath, inputDesc):is, new) oldInputs (ExecutionLogBranch inputses)
-  = case NonEmptyMap.lookup filePath inputses of
-      -- no filepath matching this input at current level
-      Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-        where newInput = ExecutionLogTreeInput (NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is)
-
-      -- found an input with the same file path, need to check
-      -- it's filedesc
-      Just (ExecutionLogTreeInput{..}) ->
-        case NonEmptyMap.lookup inputDesc eltiBranches of
-          -- none of the existing filedescs matches what we have
-          Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-            where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches)
-
-          -- found exact match, append' down the tree
-          Just next -> append' (is, new) (filePath:oldInputs) next
-
+  = appendToBranch' filePath inputDesc is new oldInputs inputses
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el = append' (getInputLogs el, el) []
