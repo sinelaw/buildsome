@@ -104,7 +104,7 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-newtype ExecutionLogTree = ExecutionLogTree { executionLogNode :: Trie FilePath FileDescInput ExecutionLog ExecutionLogTree }
+newtype ExecutionLogTree = ExecutionLogTree { unExecutionLogTree :: Trie FilePath FileDescInput ExecutionLog ExecutionLogTree }
   deriving (Generic, Show)
 instance Binary ExecutionLogTree
 
