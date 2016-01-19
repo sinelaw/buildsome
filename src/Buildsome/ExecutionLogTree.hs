@@ -70,7 +70,7 @@ compareProp prop act =
           NotEquals r -> return (Left [MismatchFileDiffers r])
 
 lookup :: ExecutionLogTree -> IO (Either [(FilePath, MismatchReason)] ExecutionLog)
-lookup = Trie.lookup executionLogNode (liftIO . Dir.getMFileStatus) matchesCurrentFS
+lookup = Trie.lookup unExecutionLogTree (liftIO . Dir.getMFileStatus) matchesCurrentFS
 
 inputsList :: ExecutionLog -> [(FilePath, FileDescInput)]
 inputsList ExecutionLog{..} = Map.toList elInputsDescs
@@ -113,7 +113,7 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
               newInput =
                 NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) branches
           -- found exact match, append' down the tree
-          Just next -> append' (nextInputs, new) (filePath:oldInputs) (executionLogNode next)
+          Just next -> append' (nextInputs, new) (filePath:oldInputs) (unExecutionLogTree next)
 
 append' :: ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
@@ -136,5 +136,5 @@ append' ((filePath, inputDesc):is, new) oldInputs (Trie.Branch inputses)
 
 append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
 append el =
-    ExecutionLogTree . append' (inputsList el, el) [] . executionLogNode
+    ExecutionLogTree . append' (inputsList el, el) [] . unExecutionLogTree
 
