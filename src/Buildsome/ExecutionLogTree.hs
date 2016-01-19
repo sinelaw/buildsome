@@ -98,8 +98,8 @@ appendToBranch' :: Monad m =>
                    -> [(FilePath, FileDescInput)]
                    -> ExecutionLog
                    -> [FilePath]
-                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput (ExecutionLogTreeRef m))
-                   -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
+                   -> NonEmptyMap FilePath (NonEmptyMap FileDescInput (m (ExecutionLogTreeRef m)))
+                   -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
 appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
   case NonEmptyMap.lookup filePath inputses of
       -- no filepath matching this input at current level
@@ -114,16 +114,18 @@ appendToBranch' filePath inputDesc nextInputs new oldInputs inputses =
           -- none of the existing filedescs matches what we have
           Nothing -> Trie.Branch $ NonEmptyMap.insert filePath newInput inputses
             where
+              --newInput :: NonEmptyMap FileDescInput (ExecutionLogTreeRef m)
               newInput =
-                NonEmptyMap.insert inputDesc (return . fromExecutionLog' new nextInputs) branches
+                NonEmptyMap.insert inputDesc (fromExecutionLog' new nextInputs) branches
           -- found exact match, append' down the tree
-          Just next -> append' (nextInputs, new) (filePath:oldInputs) (executionLogNode $ unELTRef next)
+          Just next -> append' (nextInputs, new) (filePath:oldInputs)
+                       $ (executionLogNode $ unELTRef next)
 
 append' :: Monad m =>
            ([(FilePath, FileDescInput)], ExecutionLog)
            -> [FilePath]
-           -> ExecutionLogNode log (m (ExecutionLogTreeRef m))
-           -> ExecutionLogNode ExecutionLog (ExecutionLogTreeRef m)
+           -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
+           -> ExecutionLogNode ExecutionLog (m (ExecutionLogTreeRef m))
 append' ([], new)           _inputs   Trie.Leaf{}
   = Trie.Leaf new
 append' ((filePath,_):_, _) oldInputs Trie.Leaf{}
@@ -139,7 +141,7 @@ append' ([], _)             _inputs   Trie.Branch{}
 append' ((filePath, inputDesc):is, new) oldInputs (Trie.Branch inputses)
   = appendToBranch' filePath inputDesc is new oldInputs inputses
 
---append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
+append :: Monad m => ExecutionLog -> ExecutionLogTreeRef m -> ExecutionLogTreeRef m
 append el =
     ExecutionLogTreeRef . ExecutionLogTree
     . append' (inputsList el, el) []
