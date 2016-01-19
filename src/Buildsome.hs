@@ -17,7 +17,6 @@ import qualified Buildsome.ContentCache as ContentCache
 import qualified Buildsome.Color as Color
 import           Buildsome.Db (Db, IRef(..), Reason)
 import qualified Buildsome.Db as Db
-import qualified Buildsome.ExecutionLogTree as ExecutionLogTree
 import           Buildsome.FileContentDescCache (fileContentDescOfStat)
 import qualified Buildsome.MagicFiles as MagicFiles
 import qualified Buildsome.Meddling as Meddling
@@ -58,6 +57,7 @@ import           Lib.FSHook (OutputBehavior(..), OutputEffect(..))
 import qualified Lib.FSHook as FSHook
 import qualified Lib.Fresh as Fresh
 import           Lib.FileDesc (FileDesc(..), fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
+import qualified Lib.FileDesc as FileDesc
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
 import           Lib.IORef (atomicModifyIORef'_, atomicModifyIORef_)
@@ -583,6 +583,21 @@ verifyFileDesc str filePath fileDesc existingVerify = do
     (Just _, FileDescNonExisting _)  -> left (str <> " file did not exist, now exists")
     (Nothing, FileDescExisting {}) -> left (str <> " file was deleted")
 
+
+getFileDescInput :: MonadIO m => FilePath -> m Db.FileDescInputNoReasons
+getFileDescInput filePath = do
+  mStat <- liftIO $ Dir.getMFileStatus filePath
+  case mStat of
+      Nothing -> return $ FileDescNonExisting ()
+      Just stat -> do
+          contentDesc <- liftIO $ FileDesc.fileContentDescOfStat filePath stat
+          return
+              $ FileDescExisting $ Db.InputDescWith
+              { idModeAccess = Just ((), fileModeDescOfStat stat)
+              , idStatAccess = Just ((), fileStatDescOfStat stat)
+              , idContentAccess = Just ((), contentDesc)
+              }
+
 verifyInputDescs ::
   MonadIO f =>
   Db -> BuildTargetEnv -> TargetDesc ->
@@ -591,7 +606,7 @@ verifyInputDescs ::
 verifyInputDescs db BuildTargetEnv{..} TargetDesc{..} elInputsDescs = do
   forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
     annotateError filePath $
-      verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDesc mModeAccess mStatAccess mContentAccess) ->
+      verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDescWith mModeAccess mStatAccess mContentAccess) ->
         when (Posix.modificationTimeHiRes stat /= mtime) $ do
           let verify str getDesc mPair =
                 verifyMDesc ("input(" <> str <> ")") getDesc $ snd <$> mPair
@@ -659,13 +674,13 @@ executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} inputsDescs
       Just (depReason, FSHook.AccessTypeModeOnly)
     fromFileDesc (FileDescExisting (_mtime, inputDesc)) =
       case inputDesc of
-      Db.InputDesc { Db.idContentAccess = Just (depReason, _) } ->
+      Db.InputDescWith { Db.idContentAccess = Just (depReason, _) } ->
         Just (depReason, FSHook.AccessTypeFull)
-      Db.InputDesc { Db.idStatAccess = Just (depReason, _) } ->
+      Db.InputDescWith { Db.idStatAccess = Just (depReason, _) } ->
         Just (depReason, FSHook.AccessTypeStat)
-      Db.InputDesc { Db.idModeAccess = Just (depReason, _) } ->
+      Db.InputDescWith { Db.idModeAccess = Just (depReason, _) } ->
         Just (depReason, FSHook.AccessTypeModeOnly)
-      Db.InputDesc Nothing Nothing Nothing -> Nothing
+      Db.InputDescWith Nothing Nothing Nothing -> Nothing
 
 parentDirs :: [FilePath] -> [FilePath]
 parentDirs = map FilePath.takeDirectory . filter (`notElem` ["", "/"])
@@ -706,25 +721,13 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
 
 findApplyExecutionLogTree :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLogTree bte@BuildTargetEnv{..} entity TargetDesc{..} = do
-  executionLogTree <- maybe (left []) return <$> readIRef (Db.executionLogTree tdTarget $ bsDb bteBuildsome)
-  mExecutionLog <- runEitherT $ executionLogTree >>= EitherT . ExecutionLogTree.lookup
+  mExecutionLog <- Db.executionLogLookup tdTarget (bsDb bteBuildsome) getFileDescInput
   case mExecutionLog of
-    Left [] -> do
-      -- no reasons (no mismatching inputs) - this shouldn't happen!
-      -- but if it does, we can recover by building.
+    Nothing -> do
       printStrLn btePrinter . bsRender bteBuildsome $
-        cWarning $ "Execution log tree not found or empty!"
+        cWarning $ "Execution log not found or empty!"
       return Nothing
-    Left reasons -> do -- Execution log found but didn't match
-      printStrLn btePrinter . bsRender bteBuildsome . mconcat $
-        [ "No cached execution log of ", cTarget (show (targetOutputs tdTarget))
-        , " matched. Example mismatching input (one of "
-        , show $ length reasons
-        , " total): "
-        , case head reasons of (file, reason) -> cPath (show file) <> ": " <> (fromString $ show reason)
-        ]
-      return Nothing
-    Right executionLog -> do
+    Just executionLog -> do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
         , ColorText.intercalate "\n\t" $ map show . M.toList $ Db.elInputsDescs executionLog
@@ -1094,7 +1097,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
         fileContentDescOfStat "When making execution log (input)" db path stat
       return $ FileDescExisting
         ( Posix.modificationTimeHiRes stat
-        , Db.InputDesc
+        , Db.InputDescWith
           { Db.idModeAccess = modeAccess
           , Db.idStatAccess = statAccess
           , Db.idContentAccess = contentAccess
@@ -1144,14 +1147,7 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
 
     writeIRef (Db.latestExecutionLog tdTarget (bsDb bteBuildsome)) executionLog
 
-    mExecutionLogTree <- readIRef $ Db.executionLogTree tdTarget $ bsDb bteBuildsome
-    let executionLogTree =
-          -- REVIEW(Eyal): Monoid instead of this?
-          maybe
-          (ExecutionLogTree.fromExecutionLog executionLog)
-          (ExecutionLogTree.append executionLog)
-          mExecutionLogTree
-    writeIRef (Db.executionLogTree tdTarget (bsDb bteBuildsome)) executionLogTree
+    Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
 
     Print.targetTiming btePrinter "now" rcrSelfTime
     return (executionLog, rcrBuiltTargets)

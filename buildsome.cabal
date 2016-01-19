@@ -39,7 +39,6 @@ executable buildsome
                ,     Buildsome.CompatMakefile
                ,     Buildsome.ContentCache
                ,     Buildsome.Db
-               ,     Buildsome.ExecutionLogTree
                ,     Buildsome.FileContentDescCache
                ,     Buildsome.MagicFiles
                ,     Buildsome.Meddling
