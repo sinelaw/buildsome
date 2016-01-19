@@ -6,12 +6,14 @@
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
-  , InputDesc(..)
+  , InputDescWith(..)
+  , InputDesc, inputDescDropReasons
   , OutputDesc(..)
-  , ExecutionLog(..), executionLogTree
+  , ExecutionLog(..)
+  , executionLogUpdate
+  , executionLogLookup
   , latestExecutionLog
-  , FileDescInput
-  , ExecutionLogTree(..)
+  , FileDescInput, FileDescInputNoReasons
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
   , IRef(..)
@@ -25,7 +27,9 @@ import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.Default (def)
 import           Data.IORef
+import qualified Data.Map as Map
 import           Data.Map (Map)
+import           Data.Maybe (catMaybes)
 import           Data.Monoid ((<>))
 import           Data.Set (Set)
 import qualified Data.Set as S
@@ -37,16 +41,18 @@ import           Lib.Binary (encode, decode)
 import           Lib.Directory (catchDoesNotExist, createDirectories, makeAbsolutePath)
 import           Lib.Exception (bracket)
 import qualified Lib.FSHook as FSHook
-import           Lib.FileDesc (FileDesc(..), FileContentDesc, FileModeDesc, FileStatDesc)
+import           Lib.FileDesc (FileDesc(..), bimapFileDesc, FileContentDesc, FileModeDesc, FileStatDesc)
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import           Lib.Makefile (Makefile)
 import qualified Lib.Makefile as Makefile
 import           Lib.Makefile.Monad (PutStrLn)
 
-import           Lib.Trie (Trie)
+import           Lib.NonEmptyMap (NonEmptyMap)
+import qualified Lib.NonEmptyMap as NonEmptyMap
 import           Lib.StdOutputs (StdOutputs(..))
 import           Lib.TimeInstances ()
 import qualified System.Posix.ByteString as Posix
+import           Control.Monad (forM)
 
 import           Prelude.Compat hiding (FilePath)
 
@@ -78,12 +84,17 @@ data Reason
 instance Binary Reason
 
 
-data InputDesc = InputDesc
-  { idModeAccess :: Maybe (Reason, FileModeDesc)
-  , idStatAccess :: Maybe (Reason, FileStatDesc)
-  , idContentAccess :: Maybe (Reason, FileContentDesc)
-  } deriving (Generic, Show, Ord, Eq)
-instance Binary InputDesc
+data InputDescWith a = InputDescWith
+  { idModeAccess :: Maybe (a, FileModeDesc)
+  , idStatAccess :: Maybe (a, FileStatDesc)
+  , idContentAccess :: Maybe (a, FileContentDesc)
+  } deriving (Generic, Show, Ord, Eq, Functor)
+instance Binary a => Binary (InputDescWith a)
+
+type InputDesc = InputDescWith Reason
+
+inputDescDropReasons :: InputDesc -> InputDescWith ()
+inputDescDropReasons = fmap (const ())
 
 data OutputDesc = OutputDesc
   { odStatDesc :: FileStatDesc
@@ -93,10 +104,14 @@ instance Binary OutputDesc
 
 -- TODO: naming...
 type FileDescInput = FileDesc Reason (POSIXTime, InputDesc)
+type FileDescInputNoReasons = FileDesc () (InputDescWith ())
+
+fileDescInputDropReasons :: FileDescInput -> FileDescInputNoReasons
+fileDescInputDropReasons = bimapFileDesc (const ()) (inputDescDropReasons . snd)
 
 data ExecutionLog = ExecutionLog
   { elBuildId :: BuildId
-  , elCommand :: ByteString -- Mainly for debugging
+  , elCommand :: ByteString
   , elInputsDescs :: Map FilePath FileDescInput
   , elOutputsDescs :: Map FilePath (FileDesc () (POSIXTime, OutputDesc))
   , elStdoutputs :: StdOutputs ByteString
@@ -104,9 +119,16 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-newtype ExecutionLogTree = ExecutionLogTree { unExecutionLogTree :: Trie FilePath FileDescInput ExecutionLog ExecutionLogTree }
+data ExecutionLogNodeKey = ExecutionLogNodeKey ByteString -- [(FilePath, FileDescInputNoReasons)]
   deriving (Generic, Show)
-instance Binary ExecutionLogTree
+instance Binary ExecutionLogNodeKey
+
+data ExecutionLogNode
+  = ExecutionLogNodeBranch (NonEmptyMap FilePath (NonEmptyMap FileDescInputNoReasons ExecutionLogNodeKey))
+  | ExecutionLogNodeLeaf ExecutionLog
+  deriving (Generic, Show)
+instance Binary ExecutionLogNode
+
 
 registeredOutputsRef :: Db -> IORef (Set FilePath)
 registeredOutputsRef = dbRegisteredOutputs
@@ -161,11 +183,11 @@ data IRef a = IRef
 
 data TargetLogType
   = TargetLogLatestExecutionLog
-  | TargetLogExecutionLogTree
+  | TargetLogExecutionLogNode
   deriving (Show, Eq, Ord, Generic)
 instance Binary TargetLogType
 
-mkIRefKey :: Binary a => ByteString -> Db -> IRef a
+mkIRefKey :: (Binary a) => ByteString -> Db -> IRef a
 mkIRefKey key db = IRef
   { readIRef = getKey db key
   , writeIRef = setKey db key
@@ -176,8 +198,102 @@ mkIRefKey key db = IRef
 targetKey :: TargetLogType -> Makefile.Target -> ByteString
 targetKey targetLogType target = MD5.hash $ encode targetLogType <> Makefile.targetInterpolatedCmds target
 
-executionLogTree :: Makefile.Target -> Db -> IRef ExecutionLogTree
-executionLogTree = mkIRefKey . targetKey TargetLogExecutionLogTree
+executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
+executionLogNode (ExecutionLogNodeKey k) =
+    mkIRefKey k
+
+executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
+executionLogLookup target db getCurFileDesc =
+    executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
+
+maybeCmp :: Eq a => Maybe a -> Maybe a -> Bool
+maybeCmp (Just x) (Just y) = x == y
+maybeCmp _        _        = True
+
+cmpFileDescInput :: FileDescInputNoReasons -> FileDescInputNoReasons -> Bool
+cmpFileDescInput (FileDescExisting a) (FileDescExisting b)   =
+    maybeCmp (idModeAccess a) (idModeAccess b)
+    && maybeCmp (idStatAccess a) (idStatAccess b)
+    && maybeCmp (idContentAccess a) (idContentAccess b)
+cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
+cmpFileDescInput _                    _                      = False
+
+executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
+executionLogLookup' iref db getCurFileDesc = do
+    eln <- readIRef iref
+    case eln of
+        Nothing -> return Nothing
+        Just (ExecutionLogNodeLeaf el) -> return $ Just el
+        Just (ExecutionLogNodeBranch mapOfMaps) -> do
+            logs <-
+                forM (NonEmptyMap.toList mapOfMaps) $ \(filePath, mapOfFileDescs) -> do
+                    curFileDesc <- getCurFileDesc filePath
+                    let matchingKeys = map snd $ filter ((cmpFileDescInput curFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
+                    case matchingKeys of
+                        [] -> return Nothing
+                        (k:_) -> executionLogLookup' (executionLogNode k db) db getCurFileDesc
+            case logs of
+            case catMaybes logs of
+                [] -> return Nothing
+                (x:_) -> return $ Just x
+
+executionLogNodeKey :: ExecutionLogNodeKey -> FilePath -> FileDescInputNoReasons -> ExecutionLogNodeKey
+executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ MD5.hash $ (oldKey) <> encode filePath <> encode fileDescInput
+
+executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
+executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
+
+executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ()
+executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInsert" #-} do
+    let iref = executionLogNode key db
+    -- putStrLn $ "executionLogInsert: " <> "inputsPassed: " <> (show $ length inputsPassed) <> ", inputsLeft: " <> (show $ length inputsLeft)
+    case inputsLeft of
+        [] -> do
+            -- TODO check if exists at current iref and panic?
+            writeIRef iref $ ExecutionLogNodeLeaf el
+        (i@(inputFile, inputFileDesc):is) -> do
+            let nextKey = executionLogNodeKey key inputFile inputFileDesc
+                mapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
+            writeIRef iref $ ExecutionLogNodeBranch mapOfMaps
+            executionLogInsert db nextKey el (i:inputsPassed) is
+
+executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ()
+executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) key db el [] inputFiles
+    where
+        key = executionLogNodeRootKey target
+        inputFiles = map (\(f, d) -> (f, fileDescInputDropReasons d)) . Map.toList $ elInputsDescs el
+
+
+executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
+                       -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ()
+executionLogUpdate' iref key db el inputsPassed [] = do
+    -- TODO validate current iref key matches inputsPassed?
+    writeIRef iref (ExecutionLogNodeLeaf el)
+executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputFileDesc):is) = {-# SCC "executionLogUpdate'_branch" #-} do
+    eln <- readIRef iref
+    case eln of
+        Nothing -> do
+            let nextKey = executionLogNodeKey key inputFile inputFileDesc
+                newMapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
+            writeIRef iref (ExecutionLogNodeBranch newMapOfMaps)
+            executionLogInsert db nextKey el inputsPassed inputsLeft
+        Just ExecutionLogNodeLeaf{} -> error "wat" -- TODO
+        Just (ExecutionLogNodeBranch mapOfMaps) -> do
+            case NonEmptyMap.lookup inputFile mapOfMaps of
+                Nothing -> do
+                    let nextKey = executionLogNodeKey key inputFile inputFileDesc
+                        updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.singleton inputFileDesc nextKey) mapOfMaps
+                    writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
+                    executionLogInsert db nextKey el inputsPassed inputsLeft
+                Just mapOfFileDescs -> do
+                    let matchingKeys = map snd $ filter ((cmpFileDescInput inputFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
+                    case matchingKeys of
+                        [] -> do
+                            let nextKey = executionLogNodeKey key inputFile inputFileDesc
+                                updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.insert inputFileDesc nextKey mapOfFileDescs) mapOfMaps
+                            writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
+                            executionLogInsert db nextKey el inputsPassed inputsLeft
+                        (key:_) -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
 
 latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLog
 latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
@@ -190,7 +306,7 @@ type MFileContentDesc = FileDesc () FileContentDesc
 data MakefileParseCache = MakefileParseCache
   { mpcInputs :: (FilePath, Map FilePath MFileContentDesc)
   , mpcOutput :: (Makefile, [PutStrLn])
-  } deriving (Generic)
+  } deriving (Generic, Show)
 instance Binary MakefileParseCache
 
 makefileParseCache :: Db -> Makefile.Vars -> IRef MakefileParseCache
