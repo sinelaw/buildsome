@@ -20,4 +20,4 @@ outputIgnored :: FilePath -> Bool
 outputIgnored = specialFile
 
 allowedUnspecifiedOutput :: FilePath -> Bool
-allowedUnspecifiedOutput fp = any (`BS8.isSuffixOf` fp) [".gcda"]
+allowedUnspecifiedOutput fp = any (`BS8.isSuffixOf` fp) [".gcda", ".html"]

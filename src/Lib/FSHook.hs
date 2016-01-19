@@ -324,6 +324,8 @@ mkEnvVars fsHook rootFilter jobId =
     --           pycompile "$<"
     --
   , ("PYTHONDONTWRITEBYTECODE", "1")
+  , ("CCC_ANALYZER_HTML","/tmp/scan-build-buildsome")
+  , ("CCC_ANALYZER_OUTPUT_FORMAT", "html")
   ]
 
 timedRunCommand ::

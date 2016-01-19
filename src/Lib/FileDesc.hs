@@ -156,4 +156,4 @@ fileContentDescOfStat path stat
     FileContentDescDir <$> Dir.getDirectoryContentsHash path
   | Posix.isSymbolicLink stat =
     FileContentDescSymlink <$> Posix.readSymbolicLink path
-  | otherwise = E.throwIO $ UnsupportedFileTypeError path
+  | otherwise = FileContentDescRegular . MD5.hash <$> return BS8.empty -- E.throwIO $ UnsupportedFileTypeError path
