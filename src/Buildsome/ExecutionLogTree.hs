@@ -135,33 +135,37 @@ fromExecutionLog' el ((filePath, inputDesc) : inputs) =
   . ExecutionLogTreeInput
   $ NonEmptyMap.singleton inputDesc (fromExecutionLog' el inputs)
 
-append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
-append el elt' = go (getInputLogs el, el) elt' []
-  where
-    go ([], new) ExecutionLogLeaf{} _ = ExecutionLogLeaf new
-    go ((filePath,_):_, _) (ExecutionLogLeaf{}) oldInputs
-      = error $ concat
-        [ "Existing execution log with no further inputs exists, but new one has more inputs!"
-        , "\n\t Target: ", show $ elCommand el
-        , "\n\t Example extra input: ", show filePath
-        , "\n\t Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
-        ]
-    go ([], _) (ExecutionLogBranch{}) _
-      = error "Existing execution log has more inputs, but new one has no further inputs!"
-    go ((filePath, inputDesc) : is, new) (ExecutionLogBranch inputses) oldInputs
-      = case NonEmptyMap.lookup filePath inputses of
-          -- no filepath matching this input at current level
+append' :: ([(FilePath, FileDesc () InputLog)], ExecutionLog)
+           -> ExecutionLogTree
+           -> [FilePath]
+           -> ExecutionLogTree
+append' ([], new) ExecutionLogLeaf{} _ = ExecutionLogLeaf new
+append' ((filePath,_):_, _) (ExecutionLogLeaf{}) oldInputs
+  = error $ concat
+    [ "Existing execution log with no further inputs exists, but new one has more inputs!"
+--    , "\n\t Target: ", show $ elCommand el
+    , "\n\t Example extra input: ", show filePath
+    , "\n\t Existing entry's inputs: ", concatMap (("\n\t\t" ++) . show) oldInputs
+    ]
+append' ([], _) (ExecutionLogBranch{}) _
+  = error "Existing execution log has more inputs, but new one has no further inputs!"
+append' ((filePath, inputDesc) : is, new) (ExecutionLogBranch inputses) oldInputs
+  = case NonEmptyMap.lookup filePath inputses of
+      -- no filepath matching this input at current level
+      Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
+        where newInput = ExecutionLogTreeInput (NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is)
+
+      -- found an input with the same file path, need to check
+      -- it's filedesc
+      Just (ExecutionLogTreeInput{..}) ->
+        case NonEmptyMap.lookup inputDesc eltiBranches of
+          -- none of the existing filedescs matches what we have
           Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-            where newInput = ExecutionLogTreeInput (NonEmptyMap.singleton inputDesc $ fromExecutionLog' new is)
+            where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches)
 
-          -- found an input with the same file path, need to check
-          -- it's filedesc
-          Just (ExecutionLogTreeInput{..}) ->
-            case NonEmptyMap.lookup inputDesc eltiBranches of
-              -- none of the existing filedescs matches what we have
-              Nothing -> ExecutionLogBranch $ NonEmptyMap.insert filePath newInput inputses
-                where newInput = ExecutionLogTreeInput (NonEmptyMap.insert inputDesc (fromExecutionLog' new is) eltiBranches)
+          -- found exact match, append' down the tree
+          Just next -> append' (is, new) next (filePath:oldInputs)
 
-              -- found exact match, go down the tree
-              Just next -> go (is, new) next (filePath:oldInputs)
 
+append :: ExecutionLog -> ExecutionLogTree -> ExecutionLogTree
+append el elt' = append' (getInputLogs el, el) elt' []

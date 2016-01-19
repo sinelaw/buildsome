@@ -44,7 +44,7 @@ cleanContentCacheDir buildsome = do
     case mFileStatus of
       Nothing -> return Nothing
       Just fileStatus ->
-        if (Posix.modificationTimeHiRes fileStatus - currentTime > const_MAX_CACHE_FILE_AGE)
+        if Posix.modificationTimeHiRes fileStatus - currentTime > const_MAX_CACHE_FILE_AGE
         then do
           removeFileOrDirectoryOrNothing fileName
           return $ Just fileName
