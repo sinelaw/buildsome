@@ -1090,10 +1090,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
                     , tsExistingInputs =
                       case putInputsInStats of
                       PutInputsInStats ->
-                          Just $ concat
-                          [ targetAllInputs tdTarget
-                          , [ path | (path, Db.FileDescExisting _) <- M.toList elInputsDescs ]
-                          ]
+                          Just $ targetAllInputs tdTarget ++ [ path | (path, Db.FileDescExisting _) <- M.toList elInputsDescs ]
                       Don'tPutInputsInStats -> Nothing
                     }
                   , Stats.stdErr =
