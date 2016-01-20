@@ -279,10 +279,10 @@ executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = Execut
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
 
-executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
-executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInsert" #-} do
+executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
+executionLogInsert db key el inputsLeft = {-# SCC "executionLogInsert" #-} do
     let iref = executionLogNode key db
-    debugPrint $ "executionLogInsert: " <> "inputsPassed: " <> (show $ length inputsPassed) <> ", inputsLeft: " <> (show $ length inputsLeft)
+    debugPrint $ "executionLogInsert: inputsLeft: " <> (show $ length inputsLeft)
     case inputsLeft of
         [] -> do
             -- TODO check if exists at current iref and panic?
@@ -292,29 +292,29 @@ executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInse
             let nextKey = executionLogNodeKey key inputFile inputFileDesc
                 mapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
             writeIRef iref $ ExecutionLogNodeBranch mapOfMaps
-            executionLogInsert db nextKey el (i:inputsPassed) is
+            executionLogInsert db nextKey el is
 
 executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ExecutionLogNodeKey
-executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) key db el [] inputFiles
+executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) key db el inputFiles
     where
         key = executionLogNodeRootKey target
         inputFiles = map (\(f, d) -> (f, fileDescInputDropReasons d)) . Map.toList $ elInputsDescs el
 
 
 executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
-                       -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
-executionLogUpdate' iref key db el inputsPassed [] = do
+                       -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
+executionLogUpdate' iref key db el [] = do
     -- TODO validate current iref key matches inputsPassed?
     writeIRef iref (ExecutionLogNodeLeaf el)
     return key
-executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputFileDesc):is) = {-# SCC "executionLogUpdate'_branch" #-} do
+executionLogUpdate' iref key db el inputsLeft@(i@(inputFile, inputFileDesc):is) = {-# SCC "executionLogUpdate'_branch" #-} do
     eln <- readIRef iref
     case eln of
         Nothing -> do
             let nextKey = executionLogNodeKey key inputFile inputFileDesc
                 newMapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
             writeIRef iref (ExecutionLogNodeBranch newMapOfMaps)
-            executionLogInsert db nextKey el inputsPassed inputsLeft
+            executionLogInsert db nextKey el inputsLeft
         Just ExecutionLogNodeLeaf{} -> error "wat" -- TODO
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
             case NonEmptyMap.lookup inputFile mapOfMaps of
@@ -322,7 +322,7 @@ executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputF
                     let nextKey = executionLogNodeKey key inputFile inputFileDesc
                         updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.singleton inputFileDesc nextKey) mapOfMaps
                     writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
-                    executionLogInsert db nextKey el inputsPassed inputsLeft
+                    executionLogInsert db nextKey el inputsLeft
                 Just mapOfFileDescs -> do
                     let matchingKeys = map snd $ filter ((cmpFileDescInput inputFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
                     case matchingKeys of
@@ -330,8 +330,8 @@ executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputF
                             let nextKey = executionLogNodeKey key inputFile inputFileDesc
                                 updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.insert inputFileDesc nextKey mapOfFileDescs) mapOfMaps
                             writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
-                            executionLogInsert db nextKey el inputsPassed inputsLeft
-                        [key] -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
+                            executionLogInsert db nextKey el inputsLeft
+                        [key] -> executionLogUpdate' (executionLogNode key db) key db el is
                         _ -> error "waaaat"
 
 latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLogNodeKey
