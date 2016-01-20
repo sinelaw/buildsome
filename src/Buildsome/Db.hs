@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -57,6 +58,12 @@ import           Prelude.Compat hiding (FilePath)
 
 schemaVersion :: ByteString
 schemaVersion = "schema.ver.21"
+
+#ifdef DEBUG_PRINT
+debugPrint = putStrLn
+#else
+debugPrint x = return ()
+#endif
 
 data Db = Db
   { dbLevel :: LevelDB.DB
@@ -201,8 +208,16 @@ executionLogNode (ExecutionLogNodeKey k) =
     mkIRefKey k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
-executionLogLookup target db getCurFileDesc =
-    executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
+executionLogLookup target db getCurFileDesc = do
+    let targetName = show $ head $ Makefile.targetOutputs target
+    debugPrint $ "executionLogLookup: looking up " <> targetName
+    res <- executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
+    let res' =
+            case res of
+            Nothing -> "not found"
+            Just _ -> "FOUND"
+    debugPrint $ "executionLogLookup: " <> res' <> " - when looking up " <> targetName
+    return res
 
 maybeCmp :: Eq a => Maybe a -> Maybe a -> Bool
 maybeCmp (Just x) (Just y) = x == y
@@ -221,7 +236,9 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
     eln <- readIRef iref
     case eln of
         Nothing -> return Nothing
-        Just (ExecutionLogNodeLeaf el) -> return $ Just el
+        Just (ExecutionLogNodeLeaf el) -> do
+            debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
+            return $ Just el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
             logs <-
                 forM (NonEmptyMap.toList mapOfMaps) $ \(filePath, mapOfFileDescs) -> do
@@ -229,8 +246,9 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
                     let matchingKeys = map snd $ filter ((cmpFileDescInput curFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
                     case matchingKeys of
                         [] -> return Nothing
-                        (k:_) -> executionLogLookup' (executionLogNode k db) db getCurFileDesc
-            case logs of
+                        (k:_) -> do
+                            debugPrint $ "executionLogLookup': traversing into " <> show filePath
+                            executionLogLookup' (executionLogNode k db) db getCurFileDesc
             case catMaybes logs of
                 [] -> return Nothing
                 (x:_) -> return $ Just x
@@ -244,7 +262,7 @@ executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogN
 executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ()
 executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInsert" #-} do
     let iref = executionLogNode key db
-    -- putStrLn $ "executionLogInsert: " <> "inputsPassed: " <> (show $ length inputsPassed) <> ", inputsLeft: " <> (show $ length inputsLeft)
+    debugPrint $ "executionLogInsert: " <> "inputsPassed: " <> (show $ length inputsPassed) <> ", inputsLeft: " <> (show $ length inputsLeft)
     case inputsLeft of
         [] -> do
             -- TODO check if exists at current iref and panic?
