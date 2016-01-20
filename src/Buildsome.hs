@@ -687,19 +687,28 @@ verbosePrint BuildTargetEnv{..} = whenVerbose bteBuildsome . printStrLn btePrint
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog bte entity targetDesc =
-    findApplyExecutionLog' bte entity targetDesc Nothing
+    findApplyExecutionLog' bte entity targetDesc Nothing Nothing
 
-findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
-findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput = do
+tryLoadLatestExecutionLog :: BuildTargetEnv -> Target -> IO (Maybe Db.ExecutionLog)
+tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = do
+    mLatestExecutionLogKey <- readIRef $ Db.latestExecutionLog target (bsDb bteBuildsome)
+    case mLatestExecutionLogKey of
+        Nothing -> return Nothing
+        Just latestExecutionLogKey -> do
+          elNode <- readIRef $ Db.executionLogNode latestExecutionLogKey (bsDb bteBuildsome)
+          case elNode of
+              Nothing -> return Nothing
+              Just (Db.ExecutionLogNodeLeaf el) -> return $ Just el
+              Just _ -> error "Expected leaf!" -- TODO bah
+
+findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
+findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput mLatestExecutionLog = do
   mExecutionLog <- Db.executionLogLookup tdTarget (bsDb bteBuildsome) getFileDescInput
   case mExecutionLog of
-    Left Nothing -> do
-      printStrLn btePrinter . bsRender bteBuildsome $
-        cWarning $ "Execution log missing for: " <> cTarget (show (targetOutputs tdTarget))
-      return Nothing
+    Left Nothing -> handleCacheMiss
     Left (Just missingInput) ->
       if retryingBecauseOfInput == Just missingInput
-      then return Nothing
+      then handleCacheMiss
       else do
           -- The execution log wasn't found because some input file
           -- didn't match (and the search stopped there).  Rather than
@@ -708,17 +717,11 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
           -- and guess that all the inputs there will need to be
           -- built, and THEN retry the search hoping that this time
           -- we'll reach the leaf node.
-          let getLatest = readIRef . flip Db.executionLogNode (bsDb bteBuildsome)
-          mLatestExecutionLogKey <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
-          otherMissingInputs <-
-              case mLatestExecutionLogKey of
-                  Nothing -> return []
-                  Just latestExecutionLogKey -> do
-                      mLatestExecutionLog <- getLatest latestExecutionLogKey
-                      case mLatestExecutionLog of
-                          -- TODO bah
-                          Just (Db.ExecutionLogNodeLeaf el) -> return $ M.keys $ Db.elInputsDescs el
-                          _ -> return []
+          mEL <- getLatest
+          let otherMissingInputs =
+                  case mEL of
+                  Nothing -> []
+                  Just el -> M.keys $ Db.elInputsDescs el
           builtTargetsRef <- newIORef mempty
           makeImplicitInputs builtTargetsRef bte entity
             (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
@@ -727,8 +730,20 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
             -- directories that have patterns
             (map (FSHook.Input FSHook.AccessTypeStat) (missingInput:otherMissingInputs))
             []
-          findApplyExecutionLog' bte entity targetDesc (Just missingInput) -- TODO prevent infinite loops
-    Right executionLog -> do
+          findApplyExecutionLog' bte entity targetDesc (Just missingInput) mEL -- TODO prevent infinite loops
+    Right executionLog -> applyExecutionLog executionLog
+  where
+    Color.Scheme{..} = Color.scheme
+    describeError (MismatchedFiles (str, filePath)) =
+      fromBytestring8 str <> ": " <> cPath (show filePath)
+    describeError (SpeculativeBuildFailure exception) =
+      cWarning (showFirstLine exception)
+    getLatest = do
+      case mLatestExecutionLog of
+        Nothing -> tryLoadLatestExecutionLog bte tdTarget
+        Just el -> return $ Just el
+
+    applyExecutionLog executionLog = do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
         , ColorText.intercalate "\n\t" $ map show . M.toList $ Db.elInputsDescs executionLog
@@ -744,12 +759,14 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
             ]
           return Nothing
         Right res -> return (Just res)
-  where
-    Color.Scheme{..} = Color.scheme
-    describeError (MismatchedFiles (str, filePath)) =
-      fromBytestring8 str <> ": " <> cPath (show filePath)
-    describeError (SpeculativeBuildFailure exception) =
-      cWarning (showFirstLine exception)
+
+    handleCacheMiss = do
+      verbosePrint bte $ "Execution log missing for: " <> cTarget (show (targetOutputs tdTarget))
+      mEL <- getLatest
+      case mEL of
+          Nothing -> return Nothing
+          Just executionLog -> applyExecutionLog executionLog
+
 
 data TargetDependencyLoop = TargetDependencyLoop (ColorText -> ByteString) Parents
   deriving (Typeable)
