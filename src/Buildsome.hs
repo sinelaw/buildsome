@@ -701,10 +701,32 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
       if retryingBecauseOfInput == Just missingInput
       then return Nothing
       else do
+          -- The execution log wasn't found because some input file
+          -- didn't match (and the search stopped there).  Rather than
+          -- trying to build just that input and the restarting the
+          -- search, we load the 'latest' execution log of this target
+          -- and guess that all the inputs there will need to be
+          -- built, and THEN retry the search hoping that this time
+          -- we'll reach the leaf node.
+          let getLatest = readIRef . flip Db.executionLogNode (bsDb bteBuildsome)
+          mLatestExecutionLogKey <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
+          otherMissingInputs <-
+              case mLatestExecutionLogKey of
+                  Nothing -> return []
+                  Just latestExecutionLogKey -> do
+                      mLatestExecutionLog <- getLatest latestExecutionLogKey
+                      case mLatestExecutionLog of
+                          -- TODO bah
+                          Just (Db.ExecutionLogNodeLeaf el) -> return $ M.keys $ Db.elInputsDescs el
+                          _ -> return []
           builtTargetsRef <- newIORef mempty
           makeImplicitInputs builtTargetsRef bte entity
             (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
-            [FSHook.Input FSHook.AccessTypeFull missingInput] []
+            -- AccessType is wrong here, nor we can we (rather
+            -- arbitrarily) use 'full' because it will fail on
+            -- directories that have patterns
+            (map (FSHook.Input FSHook.AccessTypeStat) (missingInput:otherMissingInputs))
+            []
           findApplyExecutionLog' bte entity targetDesc (Just missingInput) -- TODO prevent infinite loops
     Right executionLog -> do
       verbosePrint bte . mconcat $
@@ -1124,7 +1146,8 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
       makeExecutionLog bteBuildsome tdTarget rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
 
-    Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
+    executionLogNodeKey <- Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
+    writeIRef (Db.latestExecutionLog tdTarget (bsDb bteBuildsome)) executionLogNodeKey
 
     Print.targetTiming btePrinter "now" rcrSelfTime
     return (executionLog, rcrBuiltTargets)
