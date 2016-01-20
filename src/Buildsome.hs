@@ -585,7 +585,7 @@ verifyFileDesc str filePath fileDesc existingVerify = do
 
 
 getFileDescInput :: MonadIO m => FilePath -> m Db.FileDescInputNoReasons
-getFileDescInput filePath = do
+getFileDescInput filePath = {-# SCC "getFileDescInput" #-} do
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case mStat of
       Nothing -> return $ FileDescNonExisting ()

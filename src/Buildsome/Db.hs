@@ -189,9 +189,9 @@ instance Binary TargetLogType
 
 mkIRefKey :: (Binary a) => ByteString -> Db -> IRef a
 mkIRefKey key db = IRef
-  { readIRef = getKey db key
-  , writeIRef = setKey db key
-  , delIRef = deleteKey db key
+  { readIRef = {-# SCC "readIRef" #-} getKey db key
+  , writeIRef = {-# SCC "writeIRef" #-} setKey db key
+  , delIRef = {-# SCC "deleteKey" #-} deleteKey db key
   }
 
 -- TODO: Canonicalize commands (whitespace/etc)
@@ -219,7 +219,7 @@ cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
 cmpFileDescInput _                    _                      = False
 
 executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
-executionLogLookup' iref db getCurFileDesc = do
+executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
     eln <- readIRef iref
     case eln of
         Nothing -> return Nothing
