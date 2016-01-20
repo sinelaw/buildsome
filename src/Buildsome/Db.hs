@@ -12,7 +12,6 @@ module Buildsome.Db
   , ExecutionLog(..)
   , executionLogUpdate
   , executionLogLookup
-  , latestExecutionLog
   , FileDescInput, FileDescInputNoReasons
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
@@ -182,8 +181,7 @@ data IRef a = IRef
   }
 
 data TargetLogType
-  = TargetLogLatestExecutionLog
-  | TargetLogExecutionLogNode
+  = TargetLogExecutionLogNode
   deriving (Show, Eq, Ord, Generic)
 instance Binary TargetLogType
 
@@ -294,9 +292,6 @@ executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputF
                             writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
                             executionLogInsert db nextKey el inputsPassed inputsLeft
                         (key:_) -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
-
-latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLog
-latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
