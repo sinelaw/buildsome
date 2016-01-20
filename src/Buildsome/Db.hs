@@ -11,8 +11,11 @@ module Buildsome.Db
   , InputDesc, inputDescDropReasons
   , OutputDesc(..)
   , ExecutionLog(..)
+  , ExecutionLogNode(..)
+  , executionLogNode
   , executionLogUpdate
   , executionLogLookup
+  , latestExecutionLog
   , FileDescInput, FileDescInputNoReasons
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
@@ -191,7 +194,8 @@ data IRef a = IRef
   }
 
 data TargetLogType
-  = TargetLogExecutionLogNode
+  = TargetLogLatestExecutionLog
+  | TargetLogExecutionLogNode
   deriving (Show, Eq, Ord, Generic)
 instance Binary TargetLogType
 
@@ -207,12 +211,14 @@ targetKey :: TargetLogType -> Makefile.Target -> ByteString
 targetKey targetLogType target = MD5.hash $ encode targetLogType <> Makefile.targetInterpolatedCmds target
 
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
-executionLogNode (ExecutionLogNodeKey k) =
-    mkIRefKey k
+executionLogNode (ExecutionLogNodeKey k) = mkIRefKey k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db getCurFileDesc = do
-    let targetName = show $ head $ Makefile.targetOutputs target
+    let targetName =
+            show $ case Makefile.targetOutputs target of
+                   [] -> error "empty target?!"
+                   (x:_) -> x
     debugPrint $ "executionLogLookup: looking up " <> targetName
     res <- executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
     let res' =
@@ -273,7 +279,7 @@ executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = Execut
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
 
-executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ()
+executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
 executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInsert" #-} do
     let iref = executionLogNode key db
     debugPrint $ "executionLogInsert: " <> "inputsPassed: " <> (show $ length inputsPassed) <> ", inputsLeft: " <> (show $ length inputsLeft)
@@ -281,13 +287,14 @@ executionLogInsert db key el inputsPassed inputsLeft = {-# SCC "executionLogInse
         [] -> do
             -- TODO check if exists at current iref and panic?
             writeIRef iref $ ExecutionLogNodeLeaf el
+            return key
         (i@(inputFile, inputFileDesc):is) -> do
             let nextKey = executionLogNodeKey key inputFile inputFileDesc
                 mapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
             writeIRef iref $ ExecutionLogNodeBranch mapOfMaps
             executionLogInsert db nextKey el (i:inputsPassed) is
 
-executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ()
+executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ExecutionLogNodeKey
 executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) key db el [] inputFiles
     where
         key = executionLogNodeRootKey target
@@ -295,10 +302,11 @@ executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) 
 
 
 executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
-                       -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ()
+                       -> [(FilePath, FileDescInputNoReasons)] -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
 executionLogUpdate' iref key db el inputsPassed [] = do
     -- TODO validate current iref key matches inputsPassed?
     writeIRef iref (ExecutionLogNodeLeaf el)
+    return key
 executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputFileDesc):is) = {-# SCC "executionLogUpdate'_branch" #-} do
     eln <- readIRef iref
     case eln of
@@ -325,6 +333,9 @@ executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputF
                             executionLogInsert db nextKey el inputsPassed inputsLeft
                         [key] -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
                         _ -> error "waaaat"
+
+latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLogNodeKey
+latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
