@@ -29,9 +29,17 @@ flag Charts
   description: Enable Cairo charts support
   default: False
 
+flag DebugPrint
+  description: Print internal debugging information
+  default: False
+
 executable buildsome
   hs-source-dirs:    src/
   main-is:           Main.hs
+
+  if flag(DebugPrint)
+     cpp-options: -DDEBUG_PRINT
+
   if flag(debug) {
     ghc-options:       -threaded -Wall -O0
   } else {
