@@ -704,30 +704,36 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
   mLatestExecutionLog <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
   case mLatestExecutionLog of
     Nothing -> do
-      verbosePrint bte . mconcat $
-        [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
-        , " not found."
-        ]
-      return Nothing
+      findApplyExecutionLog' bte entity targetDesc Nothing
     Just executionLog -> do
       eRes <- tryApplyExecutionLog bte entity targetDesc executionLog
       case eRes of
         Left (SpeculativeBuildFailure exception)
           | isThreadKilled exception -> return Nothing
         Right res -> return (Just res)
-        Left _ -> findApplyExecutionLogTree bte entity targetDesc
+        Left _ -> findApplyExecutionLog' bte entity targetDesc Nothing
+
   where
     Color.Scheme{..} = Color.scheme
 
-findApplyExecutionLogTree :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
-findApplyExecutionLogTree bte@BuildTargetEnv{..} entity TargetDesc{..} = do
+findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
+findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput = do
   mExecutionLog <- Db.executionLogLookup tdTarget (bsDb bteBuildsome) getFileDescInput
   case mExecutionLog of
-    Nothing -> do
+    Left Nothing -> do
       printStrLn btePrinter . bsRender bteBuildsome $
-        cWarning $ "Execution log not found or empty!"
+        cWarning $ "Execution log missing for: " <> cTarget (show (targetOutputs tdTarget))
       return Nothing
-    Just executionLog -> do
+    Left (Just missingInput) ->
+      if retryingBecauseOfInput == Just missingInput
+      then return Nothing
+      else do
+          builtTargetsRef <- newIORef mempty
+          makeImplicitInputs builtTargetsRef bte entity
+            (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
+            [FSHook.Input FSHook.AccessTypeFull missingInput] []
+          findApplyExecutionLog' bte entity targetDesc (Just missingInput) -- TODO prevent infinite loops
+    Right executionLog -> do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
         , ColorText.intercalate "\n\t" $ map show . M.toList $ Db.elInputsDescs executionLog

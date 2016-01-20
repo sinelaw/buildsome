@@ -27,6 +27,7 @@ import           Data.Binary (Binary(..))
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.Default (def)
+import qualified Data.Either as Either
 import           Data.IORef
 import qualified Data.Map as Map
 import           Data.Map (Map)
@@ -39,6 +40,8 @@ import           Data.Time.Clock.POSIX (POSIXTime)
 import qualified Database.LevelDB.Base as LevelDB
 import           GHC.Generics (Generic)
 import           Lib.Binary (encode, decode)
+import           Lib.Cmp (Cmp(..))
+import qualified Lib.Cmp as Cmp
 import           Lib.Directory (catchDoesNotExist, createDirectories, makeAbsolutePath)
 import           Lib.Exception (bracket)
 import qualified Lib.FSHook as FSHook
@@ -209,51 +212,62 @@ executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
 executionLogNode (ExecutionLogNodeKey k) =
     mkIRefKey k
 
-executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
+executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db getCurFileDesc = do
     let targetName = show $ head $ Makefile.targetOutputs target
     debugPrint $ "executionLogLookup: looking up " <> targetName
     res <- executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
     let res' =
             case res of
-            Nothing -> "not found"
-            Just _ -> "FOUND"
+            Left f -> "not found, missing: " <> show f
+            Right _ -> "FOUND"
     debugPrint $ "executionLogLookup: " <> res' <> " - when looking up " <> targetName
     return res
 
-maybeCmp :: Eq a => Maybe a -> Maybe a -> Bool
-maybeCmp (Just x) (Just y) = x == y
+maybeCmp :: Cmp a => Maybe a -> Maybe a -> Bool
+maybeCmp (Just x) (Just y) = Cmp.Equals == (x `cmp` y)
 maybeCmp _        _        = True
 
 cmpFileDescInput :: FileDescInputNoReasons -> FileDescInputNoReasons -> Bool
 cmpFileDescInput (FileDescExisting a) (FileDescExisting b)   =
-    maybeCmp (idModeAccess a) (idModeAccess b)
-    && maybeCmp (idStatAccess a) (idStatAccess b)
-    && maybeCmp (idContentAccess a) (idContentAccess b)
+  maybeCmp' (idModeAccess a) (idModeAccess b)
+  && maybeCmp' (idStatAccess a) (idStatAccess b)
+  && maybeCmp' (idContentAccess a) (idContentAccess b)
+  where
+    maybeCmp' x y = maybeCmp (snd <$> x) (snd <$> y)
+
 cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
 cmpFileDescInput _                    _                      = False
 
-executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Maybe ExecutionLog)
+executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
     eln <- readIRef iref
     case eln of
-        Nothing -> return Nothing
+        Nothing -> return $ Left Nothing
         Just (ExecutionLogNodeLeaf el) -> do
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
-            return $ Just el
+            return $ Right el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
             logs <-
                 forM (NonEmptyMap.toList mapOfMaps) $ \(filePath, mapOfFileDescs) -> do
                     curFileDesc <- getCurFileDesc filePath
                     let matchingKeys = map snd $ filter ((cmpFileDescInput curFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
                     case matchingKeys of
-                        [] -> return Nothing
-                        (k:_) -> do
+                        [] -> do
+                            debugPrint $ "executionLogLookup': NO MATCH for " <> show filePath
+                            return $ Left $ Just filePath
+                        [k] -> do
                             debugPrint $ "executionLogLookup': traversing into " <> show filePath
                             executionLogLookup' (executionLogNode k db) db getCurFileDesc
-            case catMaybes logs of
-                [] -> return Nothing
-                (x:_) -> return $ Just x
+                        _ -> error "waaat matchingKeys"
+            let (lefts, rights) = Either.partitionEithers logs
+            case rights of
+                [] ->
+                    case catMaybes lefts of
+                        [] -> return $ Left Nothing
+                        (fp:_) -> return $ Left $ Just fp
+                [x] -> return $ Right x
+                _ -> error "waaaaaat catMaybes logs"
 
 executionLogNodeKey :: ExecutionLogNodeKey -> FilePath -> FileDescInputNoReasons -> ExecutionLogNodeKey
 executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ MD5.hash $ (oldKey) <> encode filePath <> encode fileDescInput
@@ -311,7 +325,8 @@ executionLogUpdate' iref key db el inputsPassed inputsLeft@(i@(inputFile, inputF
                                 updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.insert inputFileDesc nextKey mapOfFileDescs) mapOfMaps
                             writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
                             executionLogInsert db nextKey el inputsPassed inputsLeft
-                        (key:_) -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
+                        [key] -> executionLogUpdate' (executionLogNode key db) key db el (i:inputsPassed) is
+                        _ -> error "waaaat"
 
 latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLog
 latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
