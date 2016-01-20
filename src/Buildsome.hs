@@ -701,17 +701,23 @@ verbosePrint BuildTargetEnv{..} = whenVerbose bteBuildsome . printStrLn btePrint
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = do
-  mLatestExecutionLog <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
-  case mLatestExecutionLog of
-    Nothing -> do
-      findApplyExecutionLog' bte entity targetDesc Nothing
-    Just executionLog -> do
-      eRes <- tryApplyExecutionLog bte entity targetDesc executionLog
-      case eRes of
-        Left (SpeculativeBuildFailure exception)
-          | isThreadKilled exception -> return Nothing
-        Right res -> return (Just res)
-        Left _ -> findApplyExecutionLog' bte entity targetDesc Nothing
+  mLatestExecutionLogKey <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
+  case mLatestExecutionLogKey of
+    Nothing -> return Nothing
+    Just latestExecutionLogKey -> do
+      let getLatest = readIRef . flip Db.executionLogNode (bsDb bteBuildsome)
+      mLatestExecutionLog <- getLatest latestExecutionLogKey
+      case mLatestExecutionLog of
+        Nothing -> do
+          findApplyExecutionLog' bte entity targetDesc Nothing
+        Just Db.ExecutionLogNodeBranch{} -> error "Exepecting leaf!"
+        Just (Db.ExecutionLogNodeLeaf executionLog) -> do
+          eRes <- tryApplyExecutionLog bte entity targetDesc executionLog
+          case eRes of
+            Left (SpeculativeBuildFailure exception)
+              | isThreadKilled exception -> return Nothing
+            Right res -> return (Just res)
+            Left _ -> findApplyExecutionLog' bte entity targetDesc Nothing
 
   where
     Color.Scheme{..} = Color.scheme
@@ -724,15 +730,11 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
       printStrLn btePrinter . bsRender bteBuildsome $
         cWarning $ "Execution log missing for: " <> cTarget (show (targetOutputs tdTarget))
       return Nothing
-    Left (Just missingInput) ->
-      if retryingBecauseOfInput == Just missingInput
-      then return Nothing
-      else do
-          builtTargetsRef <- newIORef mempty
-          makeImplicitInputs builtTargetsRef bte entity
-            (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
-            [FSHook.Input FSHook.AccessTypeFull missingInput] []
-          findApplyExecutionLog' bte entity targetDesc (Just missingInput) -- TODO prevent infinite loops
+    Left (Just missingInput) -> do
+      printStrLn btePrinter . bsRender bteBuildsome $
+        cWarning $ "Execution log for: " <> cTarget (show (targetOutputs tdTarget))
+                   <> " didn't match because of inputs: " <> (cPath $ show missingInput)
+      return Nothing
     Right executionLog -> do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
@@ -1151,9 +1153,8 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
       makeExecutionLog bteBuildsome tdTarget rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
 
-    writeIRef (Db.latestExecutionLog tdTarget (bsDb bteBuildsome)) executionLog
-
-    Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
+    executionLogNodeKey <- Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
+    writeIRef (Db.latestExecutionLog tdTarget (bsDb bteBuildsome)) executionLogNodeKey
 
     Print.targetTiming btePrinter "now" rcrSelfTime
     return (executionLog, rcrBuiltTargets)
