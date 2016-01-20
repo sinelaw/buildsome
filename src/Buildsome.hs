@@ -701,26 +701,6 @@ verbosePrint BuildTargetEnv{..} = whenVerbose bteBuildsome . printStrLn btePrint
 -- in order
 findApplyExecutionLog :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = do
-  mLatestExecutionLog <- readIRef $ Db.latestExecutionLog tdTarget $ bsDb bteBuildsome
-  case mLatestExecutionLog of
-    Nothing -> do
-      verbosePrint bte . mconcat $
-        [ "Execution log of ", cTarget (show (targetOutputs tdTarget))
-        , " not found."
-        ]
-      return Nothing
-    Just executionLog -> do
-      eRes <- tryApplyExecutionLog bte entity targetDesc executionLog
-      case eRes of
-        Left (SpeculativeBuildFailure exception)
-          | isThreadKilled exception -> return Nothing
-        Right res -> return (Just res)
-        Left _ -> findApplyExecutionLogTree bte entity targetDesc
-  where
-    Color.Scheme{..} = Color.scheme
-
-findApplyExecutionLogTree :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
-findApplyExecutionLogTree bte@BuildTargetEnv{..} entity TargetDesc{..} = do
   mExecutionLog <- Db.executionLogLookup tdTarget (bsDb bteBuildsome) getFileDescInput
   case mExecutionLog of
     Nothing -> do
@@ -1144,8 +1124,6 @@ buildTargetReal bte@BuildTargetEnv{..} entity TargetDesc{..} =
     executionLog <-
       makeExecutionLog bteBuildsome tdTarget rcrInputs (S.toList outputs)
       rcrStdOutputs rcrSelfTime
-
-    writeIRef (Db.latestExecutionLog tdTarget (bsDb bteBuildsome)) executionLog
 
     Db.executionLogUpdate tdTarget (bsDb bteBuildsome) executionLog
 
