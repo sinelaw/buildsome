@@ -28,6 +28,7 @@ module Buildsome.Db
 import           Buildsome.BuildId (BuildId)
 import qualified Lib.Hash as Hash
 import           Lib.Hash (Hash)
+import           Control.Monad (join)
 import           Data.Binary (Binary(..))
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
@@ -223,10 +224,10 @@ instance Binary StringKey
 string :: StringKey -> Db -> IRef ByteString
 string (StringKey k) = mkIRefKey $ "s:" <> Hash.asByteString k
 
---updateString :: StringKey ->
-updateString db k s smap =
+updateString :: Db -> StringKey -> ByteString -> IO () -> IO ()
+updateString db k s act = join $ atomicModifyIORef' (dbStrings db) $ \smap ->
   case Map.lookup k smap of
-      Nothing -> (Map.insert k s smap, writeIRef (string k db) s)
+      Nothing -> (Map.insert k s smap, act)
       Just _ -> (smap, return ())
 
 getString :: StringKey -> Db -> IO ByteString
@@ -234,18 +235,17 @@ getString k db = do
     smap <- readIORef $ dbStrings db
     case Map.lookup k smap of
         Nothing -> do
-            s <- loadFromDb
-            _ <- atomicModifyIORef' (dbStrings db) (updateString db k s)
+            s <- mustExist <$> readIRef (string k db)
+            _ <- updateString db k s $ return ()
             return s
         Just s -> return s
     where
-        loadFromDb = mustExist <$> readIRef (string k db)
         mustExist Nothing = error $ "Corrupt DB? Missing string for key: " <> show k
         mustExist (Just s) = s
 
 putString :: ByteString -> Db -> IO StringKey
 putString s db = do
-  _ <- atomicModifyIORef' (dbStrings db) (updateString db k s)
+  _ <- updateString db k s $ writeIRef (string k db) s
   return k
   where
     k = StringKey (Hash.md5 s)
