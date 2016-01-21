@@ -10,7 +10,6 @@ import qualified Buildsome.Color as Color
 import           Control.Monad (unless, when, forM)
 import           Control.Monad.IO.Class (MonadIO(..))
 import           Control.Monad.Trans.Either (EitherT(..), left)
-import           Data.ByteString (ByteString)
 import           Data.Maybe (catMaybes)
 import           Data.Monoid
 import           Data.String (IsString(..))
@@ -20,6 +19,8 @@ import           Lib.FileDesc (FileContentDesc(..), BasicStatEssence(..), FullSt
 import           Lib.FilePath (FilePath, (</>))
 import qualified Lib.FilePath as FilePath
 import           Lib.Printer (printStrLn)
+import           Lib.Hash (Hash)
+import qualified Lib.Hash as Hash
 import           Lib.Show (show)
 import qualified System.Posix.ByteString as Posix
 
@@ -55,8 +56,8 @@ cleanContentCacheDir buildsome = do
     [ "Cache contains ", show (length removed)
     , ", removed ", show numRemoved, " old cache files" ]
 
-mkTargetWithHashPath :: Buildsome -> ByteString -> FilePath
-mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> Base16.encode contentHash-- (outPath <> "." <> Base16.encode contentHash)
+mkTargetWithHashPath :: Buildsome -> Hash -> FilePath
+mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> Base16.encode (Hash.asByteString contentHash)-- (outPath <> "." <> Base16.encode contentHash)
 
 refreshFromContentCache :: (IsString e, MonadIO m) =>
   BuildTargetEnv -> FilePath -> Maybe FileContentDesc -> Maybe FileStatDesc -> EitherT e m ()
