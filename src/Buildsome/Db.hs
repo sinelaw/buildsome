@@ -271,8 +271,9 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
                     case catMaybes lefts of
                         [] -> return $ Left Nothing
                         (fp:_) -> return $ Left $ Just fp
-                [x] -> return $ Right x
-                _ -> error "waaaaaat catMaybes logs"
+                (x:_) -> return $ Right x
+                -- TODO
+--                _ -> error "waaaaaat catMaybes logs"
 
 executionLogNodeKey :: ExecutionLogNodeKey -> FilePath -> FileDescInputNoReasons -> ExecutionLogNodeKey
 executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ oldKey <> Hash.md5 (encode filePath <> encode fileDescInput)
