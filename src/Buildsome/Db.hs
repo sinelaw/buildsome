@@ -221,13 +221,22 @@ newtype StringKey = StringKey { fromStringKey :: Hash }
 instance Binary StringKey
 
 string :: StringKey -> Db -> IRef ByteString
-string (StringKey k) = mkIRefKey $ Hash.asByteString k
+string (StringKey k) = mkIRefKey $ "s:" <> Hash.asByteString k
+
+--updateString :: StringKey ->
+updateString db k s smap =
+  case Map.lookup k smap of
+      Nothing -> (Map.insert k s smap, writeIRef (string k db) s)
+      Just _ -> (smap, return ())
 
 getString :: StringKey -> Db -> IO ByteString
 getString k db = do
     smap <- readIORef $ dbStrings db
     case Map.lookup k smap of
-        Nothing -> loadFromDb
+        Nothing -> do
+            s <- loadFromDb
+            _ <- atomicModifyIORef' (dbStrings db) (updateString db k s)
+            return s
         Just s -> return s
     where
         loadFromDb = mustExist <$> readIRef (string k db)
@@ -236,13 +245,9 @@ getString k db = do
 
 putString :: ByteString -> Db -> IO StringKey
 putString s db = do
-  atomicModifyIORef (dbStrings db) update
+  _ <- atomicModifyIORef' (dbStrings db) (updateString db k s)
   return k
   where
-    update smap =
-      case Map.lookup k smap of
-          Nothing -> (Map.insert k s smap, writeIRef (string k db) s)
-          Just _ -> (smap, return ())
     k = StringKey (Hash.md5 s)
 
 -- TODO: Canonicalize commands (whitespace/etc)
@@ -250,7 +255,7 @@ targetKey :: TargetLogType -> Makefile.Target -> Hash
 targetKey targetLogType target = Hash.md5 $ encode targetLogType <> Makefile.targetCmds target
 
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
-executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ Hash.asByteString k
+executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ "n:" <> Hash.asByteString k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db getCurFileDesc = do
@@ -389,7 +394,7 @@ latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLogNodeKey
 latestExecutionLog = mkIRefKey . Hash.asByteString . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
-fileContentDescCache = mkIRefKey
+fileContentDescCache fp db = mkIRefKey ("c:" <> fp) db
 
 type MFileContentDesc = FileDesc () FileContentDesc
 
