@@ -34,6 +34,7 @@ import qualified Data.ByteString.Char8 as BS8
 import           Data.Default (def)
 import qualified Data.Either as Either
 import           Data.IORef
+import qualified Data.Map as Map
 import           Data.Map (Map)
 import           Data.Maybe (catMaybes)
 import           Data.Monoid ((<>))
@@ -77,6 +78,7 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
+  , dbStrings :: IORef (Map StringKey ByteString)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -179,10 +181,11 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
+  strings <- newIORef Map.empty
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs)
+    body (Db levelDb registeredOutputs leakedOutputs strings)
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -221,16 +224,26 @@ string :: StringKey -> Db -> IRef ByteString
 string (StringKey k) = mkIRefKey $ Hash.asByteString k
 
 getString :: StringKey -> Db -> IO ByteString
-getString k db = mustExist <$> readIRef (string k db)
+getString k db = do
+    smap <- readIORef $ dbStrings db
+    case Map.lookup k smap of
+        Nothing -> loadFromDb
+        Just s -> return s
     where
+        loadFromDb = mustExist <$> readIRef (string k db)
         mustExist Nothing = error $ "Corrupt DB? Missing string for key: " <> show k
         mustExist (Just s) = s
 
 putString :: ByteString -> Db -> IO StringKey
 putString s db = do
-    let key = StringKey (Hash.md5 s)
-    writeIRef (string key db) s
-    return key
+  atomicModifyIORef (dbStrings db) update
+  return k
+  where
+    update smap =
+      case Map.lookup k smap of
+          Nothing -> (Map.insert k s smap, writeIRef (string k db) s)
+          Just _ -> (smap, return ())
+    k = StringKey (Hash.md5 s)
 
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> Hash
