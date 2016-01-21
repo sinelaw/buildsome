@@ -516,7 +516,7 @@ tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog =
       EitherT $
       syncCatchAndLogSpeculativeErrors btePrinter targetDesc
       (Left . SpeculativeBuildFailure)
-      (Right <$> executionLogBuildInputs bte entity targetDesc (M.toList $ Db.elInputsDescs executionLog))
+      (Right <$> executionLogBuildInputs bte entity targetDesc (Db.elInputsDescs executionLog))
     bimapEitherT MismatchedFiles id $
       executionLogVerifyFilesState bte targetDesc executionLog
     return (executionLog, builtTargets)
@@ -620,12 +620,14 @@ executionLogVerifyFilesState ::
   MonadIO m =>
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
-executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLog{..} = do
-  verifyInputDescs db bte TargetDesc{..} elInputsDescs
-  verifyOutputDescs db bte TargetDesc{..} elOutputsDescs
+executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLogOf{..} = do
+  let mapInputDescs = M.fromList elInputsDescs
+  let mapOutputDescs = M.fromList elOutputsDescs
+  verifyInputDescs db bte TargetDesc{..} mapInputDescs
+  verifyOutputDescs db bte TargetDesc{..} mapOutputDescs
   liftIO $
     replayExecutionLog bte tdTarget
-    (M.keysSet elInputsDescs) (M.keysSet elOutputsDescs)
+    (M.keysSet mapInputDescs) (M.keysSet mapOutputDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
@@ -698,7 +700,7 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = do
           elNode <- readIRef $ Db.executionLogNode latestExecutionLogKey (bsDb bteBuildsome)
           case elNode of
               Nothing -> return Nothing
-              Just (Db.ExecutionLogNodeLeaf el) -> return $ Just el
+              Just (Db.ExecutionLogNodeLeaf el) -> Just <$> Db.getExecutionLog (bsDb bteBuildsome) el
               Just _ -> error "Expected leaf!" -- TODO bah
 
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
@@ -721,7 +723,7 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
           let otherMissingInputs =
                   case mEL of
                   Nothing -> []
-                  Just el -> M.keys $ Db.elInputsDescs el
+                  Just el -> map fst $ Db.elInputsDescs el
           builtTargetsRef <- newIORef mempty
           makeImplicitInputs builtTargetsRef bte entity
             (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
@@ -747,7 +749,7 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
     applyExecutionLog executionLog = do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
-        , ColorText.intercalate "\n\t" $ map show . M.toList $ Db.elInputsDescs executionLog
+        , ColorText.intercalate "\n\t" $ map show $ Db.elInputsDescs executionLog
         ]
       eRes <- tryApplyExecutionLog bte entity TargetDesc{..} executionLog
       case eRes of
@@ -1076,11 +1078,11 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
           return $ FileDescExisting
             (mtime, Db.OutputDesc (fileStatDescOfStat stat) mContentDesc)
       return (outPath, fileDesc)
-  return Db.ExecutionLog
+  return Db.ExecutionLogOf
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
-    , elInputsDescs = inputsDescs
-    , elOutputsDescs = M.fromList outputDescPairs
+    , elInputsDescs = M.toList inputsDescs
+    , elOutputsDescs = outputDescPairs
     , elStdoutputs = stdOutputs
     , elSelfTime = selfTime
     }
@@ -1203,7 +1205,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
         return $ statsOfNullCmd bte TargetDesc{..} hintedBuiltTargets
       ExplicitPathsBuilt | otherwise ->  do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
-        (whenBuilt, (Db.ExecutionLog{..}, builtTargets)) <-
+        (whenBuilt, (Db.ExecutionLogOf{..}, builtTargets)) <-
           case mSlaveStats of
           Just res -> return (Stats.FromCache, res)
           Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
@@ -1223,7 +1225,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
                     , tsExistingInputs =
                       case putInputsInStats of
                       PutInputsInStats ->
-                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- M.toList elInputsDescs ]
+                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- elInputsDescs ]
                       Don'tPutInputsInStats -> Nothing
                     }
                   , Stats.stdErr =

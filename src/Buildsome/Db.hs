@@ -1,18 +1,20 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Buildsome.Db
   ( Db, with
   , registeredOutputsRef, leakedOutputsRef
   , InputDescWith(..)
   , InputDesc, inputDescDropReasons
   , OutputDesc(..)
-  , ExecutionLog(..)
+  , ExecutionLog, ExecutionLogOf(..)
   , ExecutionLogNode(..)
-  , executionLogNode
+  , executionLogNode, getExecutionLog
   , executionLogUpdate
   , executionLogLookup
   , latestExecutionLog
@@ -26,6 +28,7 @@ module Buildsome.Db
 import           Buildsome.BuildId (BuildId)
 import qualified Lib.Hash as Hash
 import           Lib.Hash (Hash)
+import           Control.Monad (join)
 import           Data.Binary (Binary(..))
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
@@ -76,6 +79,7 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
+  , dbStrings :: IORef (Map StringKey ByteString)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -122,24 +126,28 @@ type FileDescInputNoReasons = FileDesc () (InputDescWith ())
 fileDescInputDropReasons :: FileDescInput -> FileDescInputNoReasons
 fileDescInputDropReasons = bimapFileDesc (const ()) (inputDescDropReasons . snd)
 
-data ExecutionLog = ExecutionLog
+data ExecutionLogOf s = ExecutionLogOf
   { elBuildId :: BuildId
-  , elCommand :: ByteString
-  , elInputsDescs :: Map FilePath FileDescInput
-  , elOutputsDescs :: Map FilePath (FileDesc () (POSIXTime, OutputDesc))
-  , elStdoutputs :: StdOutputs ByteString
+  , elCommand :: s
+  , elInputsDescs :: [(s, FileDescInput)]
+  , elOutputsDescs :: [(s, (FileDesc () (POSIXTime, OutputDesc)))]
+  , elStdoutputs :: StdOutputs s
   , elSelfTime :: DiffTime
-  } deriving (Generic, Show)
-instance Binary ExecutionLog
+  } deriving (Generic, Functor, Foldable, Traversable)
+
+type ExecutionLog = ExecutionLogOf ByteString
+type ExecutionLogForDb = ExecutionLogOf StringKey
+instance Binary (ExecutionLogOf StringKey)
+instance Show (ExecutionLogOf ByteString)
 
 newtype ExecutionLogNodeKey = ExecutionLogNodeKey Hash -- [(FilePath, FileDescInputNoReasons)]
   deriving (Generic, Show)
 instance Binary ExecutionLogNodeKey
 
 data ExecutionLogNode
-  = ExecutionLogNodeBranch (NonEmptyMap FilePath (NonEmptyMap FileDescInputNoReasons ExecutionLogNodeKey))
-  | ExecutionLogNodeLeaf ExecutionLog
-  deriving (Generic, Show)
+  = ExecutionLogNodeBranch (NonEmptyMap StringKey (NonEmptyMap FileDescInputNoReasons ExecutionLogNodeKey))
+  | ExecutionLogNodeLeaf ExecutionLogForDb
+  deriving (Generic)
 instance Binary ExecutionLogNode
 
 
@@ -174,10 +182,11 @@ with :: FilePath -> (Db -> IO a) -> IO a
 with rawDbPath body = do
   dbPath <- makeAbsolutePath rawDbPath
   createDirectories dbPath
+  strings <- newIORef Map.empty
   withLevelDb dbPath $ \levelDb ->
     withIORefFile (dbPath </> "outputs") $ \registeredOutputs ->
     withIORefFile (dbPath </> "leaked_outputs") $ \leakedOutputs ->
-    body (Db levelDb registeredOutputs leakedOutputs)
+    body (Db levelDb registeredOutputs leakedOutputs strings)
   where
     withIORefFile path =
       bracket (newIORef =<< decodeFileOrEmpty path) (writeBack path)
@@ -208,12 +217,45 @@ mkIRefKey key db = IRef
   , delIRef = {-# SCC "deleteKey" #-} deleteKey db key
   }
 
+newtype StringKey = StringKey { fromStringKey :: Hash }
+  deriving (Generic, Show, Eq, Ord)
+instance Binary StringKey
+
+string :: StringKey -> Db -> IRef ByteString
+string (StringKey k) = mkIRefKey $ "s:" <> Hash.asByteString k
+
+updateString :: Db -> StringKey -> ByteString -> IO () -> IO ()
+updateString db k s act = join $ atomicModifyIORef' (dbStrings db) $ \smap ->
+  case Map.lookup k smap of
+      Nothing -> (Map.insert k s smap, act)
+      Just _ -> (smap, return ())
+
+getString :: StringKey -> Db -> IO ByteString
+getString k db = do
+    smap <- readIORef $ dbStrings db
+    case Map.lookup k smap of
+        Nothing -> do
+            s <- mustExist <$> readIRef (string k db)
+            _ <- updateString db k s $ return ()
+            return s
+        Just s -> return s
+    where
+        mustExist Nothing = error $ "Corrupt DB? Missing string for key: " <> show k
+        mustExist (Just s) = s
+
+putString :: ByteString -> Db -> IO StringKey
+putString s db = do
+  _ <- updateString db k s $ writeIRef (string k db) s
+  return k
+  where
+    k = StringKey (Hash.md5 s)
+
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> Hash
 targetKey targetLogType target = Hash.md5 $ encode targetLogType <> Makefile.targetCmds target
 
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
-executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ Hash.asByteString k
+executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ "n:" <> Hash.asByteString k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db getCurFileDesc = do
@@ -245,6 +287,12 @@ cmpFileDescInput (FileDescExisting a) (FileDescExisting b)   =
 cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
 cmpFileDescInput _                    _                      = False
 
+getExecutionLog :: Db -> ExecutionLogForDb -> IO ExecutionLog
+getExecutionLog db = traverse (flip getString db)
+
+putExecutionLog :: Db -> ExecutionLog -> IO ExecutionLogForDb
+putExecutionLog db = traverse (flip putString db)
+
 executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
     eln <- readIRef iref
@@ -252,10 +300,11 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
         Nothing -> return $ Left Nothing
         Just (ExecutionLogNodeLeaf el) -> do
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
-            return $ Right el
+            Right <$> getExecutionLog db el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
             logs <-
-                forM (NonEmptyMap.toList mapOfMaps) $ \(filePath, mapOfFileDescs) -> do
+                forM (NonEmptyMap.toList mapOfMaps) $ \(filePathKey, mapOfFileDescs) -> do
+                    filePath <- getString filePathKey db
                     curFileDesc <- getCurFileDesc filePath
                     let matchingKeys = map snd $ filter ((cmpFileDescInput curFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
                     case matchingKeys of
@@ -276,8 +325,8 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
                 -- TODO
 --                _ -> error "waaaaaat catMaybes logs"
 
-executionLogNodeKey :: ExecutionLogNodeKey -> FilePath -> FileDescInputNoReasons -> ExecutionLogNodeKey
-executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ oldKey <> Hash.md5 (encode filePath <> encode fileDescInput)
+executionLogNodeKey :: ExecutionLogNodeKey -> StringKey -> FileDescInputNoReasons -> ExecutionLogNodeKey
+executionLogNodeKey (ExecutionLogNodeKey oldKey) sk fileDescInput = ExecutionLogNodeKey $ oldKey <> fromStringKey sk <> Hash.md5 (encode fileDescInput)
 
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
@@ -289,11 +338,13 @@ executionLogInsert db key el inputsLeft = {-# SCC "executionLogInsert" #-} do
     case inputsLeft of
         [] -> do
             -- TODO check if exists at current iref and panic?
-            writeIRef iref $ ExecutionLogNodeLeaf el
+            eldb <- putExecutionLog db el
+            writeIRef iref $ ExecutionLogNodeLeaf eldb
             return key
         (i@(inputFile, inputFileDesc):is) -> do
-            let nextKey = executionLogNodeKey key inputFile inputFileDesc
-                mapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
+            inputFileKey <- putString inputFile db
+            let nextKey = executionLogNodeKey key inputFileKey inputFileDesc
+                mapOfMaps = NonEmptyMap.singleton inputFileKey (NonEmptyMap.singleton inputFileDesc nextKey)
             writeIRef iref $ ExecutionLogNodeBranch mapOfMaps
             executionLogInsert db nextKey el is
 
@@ -301,37 +352,39 @@ executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ExecutionLogNo
 executionLogUpdate target db el = executionLogUpdate' (executionLogNode key db) key db el inputFiles
     where
         key = executionLogNodeRootKey target
-        inputFiles = map (\(f, d) -> (f, fileDescInputDropReasons d)) . Map.toList $ elInputsDescs el
+        inputFiles = map (\(f, d) -> (f, fileDescInputDropReasons d)) $ elInputsDescs el
 
 
 executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
                        -> [(FilePath, FileDescInputNoReasons)] -> IO ExecutionLogNodeKey
 executionLogUpdate' iref key db el [] = do
     -- TODO validate current iref key matches inputsPassed?
-    writeIRef iref (ExecutionLogNodeLeaf el)
+    eldb <- putExecutionLog db el
+    writeIRef iref (ExecutionLogNodeLeaf eldb)
     return key
 executionLogUpdate' iref key db el inputsLeft@(i@(inputFile, inputFileDesc):is) = {-# SCC "executionLogUpdate'_branch" #-} do
     eln <- readIRef iref
+    inputFileKey <- putString inputFile db
     case eln of
         Nothing -> do
-            let nextKey = executionLogNodeKey key inputFile inputFileDesc
-                newMapOfMaps = NonEmptyMap.singleton inputFile (NonEmptyMap.singleton inputFileDesc nextKey)
+            let nextKey = executionLogNodeKey key inputFileKey inputFileDesc
+                newMapOfMaps = NonEmptyMap.singleton inputFileKey (NonEmptyMap.singleton inputFileDesc nextKey)
             writeIRef iref (ExecutionLogNodeBranch newMapOfMaps)
             executionLogInsert db nextKey el inputsLeft
         Just ExecutionLogNodeLeaf{} -> error "wat" -- TODO
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
-            case NonEmptyMap.lookup inputFile mapOfMaps of
+            case NonEmptyMap.lookup inputFileKey mapOfMaps of
                 Nothing -> do
-                    let nextKey = executionLogNodeKey key inputFile inputFileDesc
-                        updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.singleton inputFileDesc nextKey) mapOfMaps
+                    let nextKey = executionLogNodeKey key inputFileKey inputFileDesc
+                        updatedMapOfMaps = NonEmptyMap.insert inputFileKey (NonEmptyMap.singleton inputFileDesc nextKey) mapOfMaps
                     writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
                     executionLogInsert db nextKey el inputsLeft
                 Just mapOfFileDescs -> do
                     let matchingKeys = map snd $ filter ((cmpFileDescInput inputFileDesc) . fst) (NonEmptyMap.toList mapOfFileDescs)
                     case matchingKeys of
                         [] -> do
-                            let nextKey = executionLogNodeKey key inputFile inputFileDesc
-                                updatedMapOfMaps = NonEmptyMap.insert inputFile (NonEmptyMap.insert inputFileDesc nextKey mapOfFileDescs) mapOfMaps
+                            let nextKey = executionLogNodeKey key inputFileKey inputFileDesc
+                                updatedMapOfMaps = NonEmptyMap.insert inputFileKey (NonEmptyMap.insert inputFileDesc nextKey mapOfFileDescs) mapOfMaps
                             writeIRef iref (ExecutionLogNodeBranch updatedMapOfMaps)
                             executionLogInsert db nextKey el inputsLeft
                         [key] -> executionLogUpdate' (executionLogNode key db) key db el is
@@ -341,7 +394,7 @@ latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLogNodeKey
 latestExecutionLog = mkIRefKey . Hash.asByteString . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
-fileContentDescCache = mkIRefKey
+fileContentDescCache fp db = mkIRefKey ("c:" <> fp) db
 
 type MFileContentDesc = FileDesc () FileContentDesc
 
