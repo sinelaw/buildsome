@@ -24,7 +24,8 @@ module Buildsome.Db
   ) where
 
 import           Buildsome.BuildId (BuildId)
-import qualified Crypto.Hash.MD5 as MD5
+import qualified Lib.Hash as Hash
+import           Lib.Hash (Hash)
 import           Data.Binary (Binary(..))
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
@@ -131,7 +132,7 @@ data ExecutionLog = ExecutionLog
   } deriving (Generic, Show)
 instance Binary ExecutionLog
 
-data ExecutionLogNodeKey = ExecutionLogNodeKey ByteString -- [(FilePath, FileDescInputNoReasons)]
+newtype ExecutionLogNodeKey = ExecutionLogNodeKey Hash -- [(FilePath, FileDescInputNoReasons)]
   deriving (Generic, Show)
 instance Binary ExecutionLogNodeKey
 
@@ -207,11 +208,11 @@ mkIRefKey key db = IRef
   }
 
 -- TODO: Canonicalize commands (whitespace/etc)
-targetKey :: TargetLogType -> Makefile.Target -> ByteString
-targetKey targetLogType target = MD5.hash $ encode targetLogType <> Makefile.targetInterpolatedCmds target
+targetKey :: TargetLogType -> Makefile.Target -> Hash
+targetKey targetLogType target = Hash.md5 $ encode targetLogType <> Makefile.targetInterpolatedCmds target
 
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
-executionLogNode (ExecutionLogNodeKey k) = mkIRefKey k
+executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ Hash.asByteString k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db getCurFileDesc = do
@@ -274,7 +275,7 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
                 _ -> error "waaaaaat catMaybes logs"
 
 executionLogNodeKey :: ExecutionLogNodeKey -> FilePath -> FileDescInputNoReasons -> ExecutionLogNodeKey
-executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ MD5.hash $ (oldKey) <> encode filePath <> encode fileDescInput
+executionLogNodeKey (ExecutionLogNodeKey oldKey) filePath fileDescInput = ExecutionLogNodeKey $ oldKey <> Hash.md5 (encode filePath <> encode fileDescInput)
 
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
@@ -335,7 +336,7 @@ executionLogUpdate' iref key db el inputsLeft@(i@(inputFile, inputFileDesc):is) 
                         _ -> error "waaaat"
 
 latestExecutionLog :: Makefile.Target -> Db -> IRef ExecutionLogNodeKey
-latestExecutionLog = mkIRefKey . targetKey TargetLogLatestExecutionLog
+latestExecutionLog = mkIRefKey . Hash.asByteString . targetKey TargetLogLatestExecutionLog
 
 fileContentDescCache :: FilePath -> Db -> IRef FileContentDescCache
 fileContentDescCache = mkIRefKey
@@ -350,4 +351,4 @@ instance Binary MakefileParseCache
 
 makefileParseCache :: Db -> Makefile.Vars -> IRef MakefileParseCache
 makefileParseCache db vars =
-    mkIRefKey ("makefileParseCache_Schema.1:" <> MD5.hash (encode vars)) db
+    mkIRefKey ("makefileParseCache_Schema.1:" <> Hash.asByteString (Hash.md5 $ encode vars)) db

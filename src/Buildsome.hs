@@ -60,6 +60,7 @@ import           Lib.FileDesc (FileDesc(..), fileModeDescOfStat, fileStatDescOfS
 import qualified Lib.FileDesc as FileDesc
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
+import qualified Lib.Hash as Hash
 import           Lib.IORef (atomicModifyIORef'_, atomicModifyIORef_)
 import           Lib.Makefile (Makefile(..), TargetType(..), Target, targetAllInputs,
                                targetInterpolatedCmds)
@@ -1060,7 +1061,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
                        db outPath stat
               case chash of
                 FileContentDescRegular contentHash ->
-                  if BS8.null contentHash
+                  if Hash.null contentHash
                   then return ()
                   else do
                     let targetPath = ContentCache.mkTargetWithHashPath buildsome contentHash
