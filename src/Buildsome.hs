@@ -57,7 +57,6 @@ import           Lib.FSHook (OutputBehavior(..), OutputEffect(..))
 import qualified Lib.FSHook as FSHook
 import qualified Lib.Fresh as Fresh
 import           Lib.FileDesc (FileDesc(..), fileModeDescOfStat, fileStatDescOfStat, FileContentDesc(..))
-import qualified Lib.FileDesc as FileDesc
 import           Lib.FilePath (FilePath, (</>), (<.>))
 import qualified Lib.FilePath as FilePath
 import qualified Lib.Hash as Hash
@@ -585,13 +584,13 @@ verifyFileDesc str filePath fileDesc existingVerify = do
     (Nothing, FileDescExisting {}) -> left (str <> " file was deleted")
 
 
-getFileDescInput :: MonadIO m => FilePath -> m Db.FileDescInputNoReasons
-getFileDescInput filePath = {-# SCC "getFileDescInput" #-} do
+getFileDescInput :: MonadIO m => Db.Db -> FilePath -> m Db.FileDescInputNoReasons
+getFileDescInput db filePath = {-# SCC "getFileDescInput" #-} do
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case mStat of
       Nothing -> return $ FileDescNonExisting ()
       Just stat -> do
-          contentDesc <- liftIO $ FileDesc.fileContentDescOfStat filePath stat
+          contentDesc <- liftIO $ fileContentDescOfStat "wat" db filePath stat
           return
               $ FileDescExisting $ Db.InputDescWith
               { idModeAccess = Just ((), fileModeDescOfStat stat)
@@ -737,7 +736,7 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = do
 
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput mLatestExecutionLog = do
-  mExecutionLog <- Db.executionLogLookup tdTarget (bsDb bteBuildsome) getFileDescInput
+  mExecutionLog <- Db.executionLogLookup tdTarget db (getFileDescInput db)
   case mExecutionLog of
     Left Nothing -> handleCacheMiss
     Left (Just missingInput) -> handleCacheMiss
@@ -748,6 +747,7 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
       fromBytestring8 str <> ": " <> cPath (show filePath)
     describeError (SpeculativeBuildFailure exception) =
       cWarning (showFirstLine exception)
+    db = bsDb bteBuildsome
     getLatest = do
       case mLatestExecutionLog of
         Nothing -> tryLoadLatestExecutionLog bte tdTarget
