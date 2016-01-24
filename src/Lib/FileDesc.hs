@@ -161,7 +161,8 @@ fileModeDescOfStat = FileModeDesc . Posix.fileMode
 fileContentDescOfStat :: FilePath -> Posix.FileStatus -> IO FileContentDesc
 fileContentDescOfStat path stat
   | Posix.isRegularFile stat =
-    FileContentDescRegular . Hash.md5 <$> BS8.readFile (BS8.unpack path)
+    {-# SCC "fileContentDescOfStat.regularfile" #-}
+    FileContentDescRegular . Hash.md5 <$> ( {-# SCC "fileContentDescOfStat.readFile" #-} BS8.readFile (BS8.unpack path) )
   | Posix.isDirectory stat =
     FileContentDescDir <$> Dir.getDirectoryContentsHash path
   | Posix.isSymbolicLink stat =

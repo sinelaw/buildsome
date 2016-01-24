@@ -555,13 +555,14 @@ verifyDesc str getDesc oldDesc = do
 
 verifyOutputDescs ::
     MonadIO m => Db -> BuildTargetEnv -> TargetDesc ->
-    Map FilePath (FileDesc ne (POSIXTime, Db.OutputDesc)) ->
+    [(IO FilePath, FileDesc ne (POSIXTime, Db.OutputDesc))] ->
     EitherT (ByteString, FilePath) m ()
 verifyOutputDescs db bte@BuildTargetEnv{..} TargetDesc{..} esOutputsDescs = do
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
-  forM_ (M.toList esOutputsDescs) $ \(filePath, outputDesc) -> do
+  forM_ esOutputsDescs $ \(filePathAct, outputDesc) -> do
+      filePath <- liftIO filePathAct
       annotateError filePath $
         verifyOutputDesc bte filePath outputDesc $
         \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
@@ -601,10 +602,11 @@ getFileDescInput db filePath = {-# SCC "getFileDescInput" #-} do
 verifyInputDescs ::
   MonadIO f =>
   Db -> BuildTargetEnv -> TargetDesc ->
-  Map FilePath (FileDesc ne (POSIXTime, Db.InputDesc)) ->
+  [(IO FilePath, FileDesc ne (POSIXTime, Db.InputDesc))] ->
   EitherT (ByteString, FilePath) f ()
 verifyInputDescs db BuildTargetEnv{..} TargetDesc{..} elInputsDescs = do
-  forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
+  forM_ elInputsDescs $ \(filePathAct, desc) -> do
+    filePath <- liftIO filePathAct
     annotateError filePath $
       verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDescWith mModeAccess mStatAccess mContentAccess) ->
         when (Posix.modificationTimeHiRes stat /= mtime) $ do
@@ -635,25 +637,24 @@ executionLogVerifyFilesState ::
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
 executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLogOf{..} = do
-  let mapInputDescs = M.fromList elInputsDescs
-  let mapOutputDescs = M.fromList elOutputsDescs
-  verifyInputDescs db bte TargetDesc{..} mapInputDescs
-  verifyOutputDescs db bte TargetDesc{..} mapOutputDescs
-  liftIO $
-    replayExecutionLog bte tdTarget
-    (M.keysSet mapInputDescs) (M.keysSet mapOutputDescs)
-    elStdoutputs elSelfTime
+  verifyInputDescs db bte TargetDesc{..} elInputsDescs
+  verifyOutputDescs db bte TargetDesc{..} elOutputsDescs
+  -- liftIO $
+  --   replayExecutionLog bte tdTarget
+  --   (map fst elInputsDescs) (map fst elOutputsDescs)
+  --   elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
 
 executionLogBuildInputs ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc ->
-  [(FilePath, Db.FileDescInput)] -> IO BuiltTargets
+  [(IO FilePath, Db.FileDescInput)] -> IO BuiltTargets
 executionLogBuildInputs bte@BuildTargetEnv{..} entity TargetDesc{..} inputsDescs = do
   -- TODO: This is good for parallelism, but bad if the set of
   -- inputs changed, as it may build stuff that's no longer
   -- required:
-  speculativeSlaves <- concat <$> mapM mkInputSlaves inputsDescs
+  inputFilePaths <- mapM (\(act, x) -> act >>= (return . (,x))) inputsDescs
+  speculativeSlaves <- concat <$> mapM mkInputSlaves inputFilePaths
   waitForSlavesWithParReleased bte entity speculativeSlaves
   where
     mkInputSlavesFor desc inputPath =
@@ -714,7 +715,7 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = do
           elNode <- readIRef $ Db.executionLogNode latestExecutionLogKey (bsDb bteBuildsome)
           case elNode of
               Nothing -> return Nothing
-              Just (Db.ExecutionLogNodeLeaf el) -> Just <$> Db.getExecutionLog (bsDb bteBuildsome) el
+              Just (Db.ExecutionLogNodeLeaf el) -> return . Just $ Db.getExecutionLog (bsDb bteBuildsome) el
               Just _ -> error "Expected leaf!" -- TODO bah
 
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
@@ -734,17 +735,17 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
           -- built, and THEN retry the search hoping that this time
           -- we'll reach the leaf node.
           mEL <- getLatest
-          let otherMissingInputs =
+          otherMissingInputs <-
                   case mEL of
-                  Nothing -> []
-                  Just el -> map fst $ Db.elInputsDescs el
+                  Nothing -> return []
+                  Just el -> mapM id . map fst $ Db.elInputsDescs el
           builtTargetsRef <- newIORef mempty
           makeImplicitInputs builtTargetsRef bte entity
             (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
             -- AccessType is wrong here, nor we can we (rather
             -- arbitrarily) use 'full' because it will fail on
             -- directories that have patterns
-            (map (FSHook.Input FSHook.AccessTypeStat) (missingInput:otherMissingInputs))
+            (map (FSHook.Input FSHook.AccessTypeStat) ((missingInput):otherMissingInputs))
             []
           findApplyExecutionLog' bte entity targetDesc (Just missingInput) mEL -- TODO prevent infinite loops
     Right executionLog -> applyExecutionLog executionLog
@@ -763,7 +764,7 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
     applyExecutionLog executionLog = do
       verbosePrint bte . mconcat $
         [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
-        , ColorText.intercalate "\n\t" $ map show $ Db.elInputsDescs executionLog
+        , ColorText.intercalate "\n\t" $ map (show . snd) $ Db.elInputsDescs executionLog
         ]
       eRes <- tryApplyExecutionLog bte entity TargetDesc{..} executionLog
       case eRes of
@@ -1094,13 +1095,14 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = do
       return (outPath, fileDesc)
   return Db.ExecutionLogOf
     { elBuildId = bsBuildId buildsome
-    , elCommand = targetCmds target
-    , elInputsDescs = M.toList inputsDescs
-    , elOutputsDescs = outputDescPairs
-    , elStdoutputs = stdOutputs
+    , elCommand = return $ targetCmds target
+    , elInputsDescs = map returnFst $ M.toList inputsDescs
+    , elOutputsDescs = map returnFst outputDescPairs
+    , elStdoutputs = fmap return stdOutputs
     , elSelfTime = selfTime
     }
   where
+    returnFst = (\(x,y) -> (return x, y))
     db = bsDb buildsome
     assertFileMTime path oldMStat =
       unless (MagicFiles.allowedUnspecifiedOutput path) $
@@ -1223,6 +1225,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
           case mSlaveStats of
           Just res -> return (Stats.FromCache, res)
           Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
+        stderr <- stdErr <$> traverse id elStdoutputs
         return $! -- strict application, otherwise stuff below isn't
                   -- gc'd apparently.
           case bteCollectStats of
@@ -1238,12 +1241,12 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} =
                     , tsDirectDeps = deps
                     , tsExistingInputs =
                       case putInputsInStats of
-                      PutInputsInStats ->
-                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- elInputsDescs ]
+                      -- PutInputsInStats ->
+                      --     Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- elInputsDescs ]
                       Don'tPutInputsInStats -> Nothing
                     }
                   , Stats.stdErr =
-                    if mempty /= stdErr elStdoutputs
+                    if mempty /= stderr
                     then S.singleton tdRep
                     else S.empty
                   }

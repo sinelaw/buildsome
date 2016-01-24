@@ -74,7 +74,7 @@ removeFileOrDirectory path =
   (Posix.removeLink path) path
 
 getDirectoryContents :: FilePath -> IO [FilePath]
-getDirectoryContents path =
+getDirectoryContents path = {-# SCC "getDirectoryContents" #-}
   bracket (Posix.openDirStream path) Posix.closeDirStream go
   where
     go dirStream = do
@@ -84,7 +84,7 @@ getDirectoryContents path =
         else (fn :) <$> go dirStream
 
 getDirectoryContentsHash :: FilePath -> IO Hash
-getDirectoryContentsHash path =
+getDirectoryContentsHash path = {-# SCC "getDirectoryContentsHash" #-}
   bracket (Posix.openDirStream path) Posix.closeDirStream (go Hash.empty)
   where
     go !hash !dirStream = do
