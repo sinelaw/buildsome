@@ -1001,9 +1001,10 @@ fsAccessHandlers outputsRef inputsRef builtTargetsRef bte@BuildTargetEnv{..} ent
         recordedOutputs <- readIORef outputsRef
         let ignoredOutput = MagicFiles.outputIgnored . getOutPath
             ignoredInput = inputIgnored recordedOutputs
-            inputs = filter (not . ignoredInput) rawInputs
-            outputs = filter (not . ignoredOutput) rawOutputs
             reason = Db.BecauseHooked accessDoc
+            outputs = filter (not . ignoredOutput) rawOutputs
+            internInput = FSHook.mapMInput (Db.internString (bsDb bteBuildsome))
+        inputs <- mapM internInput $ filter (not . ignoredInput) rawInputs
         () <- handler inputs outputs
         let addMEffect output = do
               hasEffect <- getOutEffect output

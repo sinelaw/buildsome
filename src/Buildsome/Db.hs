@@ -18,6 +18,7 @@ module Buildsome.Db
   , executionLogUpdate
   , executionLogLookup
   , latestExecutionLog
+  , internString
   , FileDescInput, FileDescInputNoReasons
   , FileContentDescCache(..), fileContentDescCache
   , Reason(..)
@@ -249,6 +250,11 @@ putString s db = do
   return k
   where
     k = StringKey (Hash.md5 s)
+
+internString :: Db -> ByteString -> IO ByteString
+internString db s = do
+    putStrLn $ BS8.unpack $ "Interning: " <> s
+    putString s db >>= flip getString db
 
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> Hash

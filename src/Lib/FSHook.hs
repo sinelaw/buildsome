@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, DeriveGeneric #-}
 module Lib.FSHook
@@ -6,7 +7,7 @@ module Lib.FSHook
   , with
 
   , OutputEffect(..), OutputBehavior(..)
-  , Input(..)
+  , Input(..), mapMInput, mapMDelayedOutput, mapMUndelayedOutput
   , DelayedOutput(..), UndelayedOutput
   , Protocol.OutFilePath(..), Protocol.OutEffect(..), Protocol.Severity(..)
   , FSAccessHandlers(..)
@@ -83,6 +84,15 @@ data DelayedOutput = DelayedOutput
   } deriving (Eq, Ord, Show)
 
 type UndelayedOutput = Protocol.OutFilePath
+
+mapMInput :: Monad m => (FilePath -> m FilePath) -> Input -> m Input
+mapMInput f input@Input{..} = f inputPath >>= \x -> return (input { inputPath = x })
+
+mapMUndelayedOutput :: Monad m => (FilePath -> m FilePath) -> Protocol.OutFilePath -> m Protocol.OutFilePath
+mapMUndelayedOutput f output@Protocol.OutFilePath{..} = f outPath >>= \x -> return (output { Protocol.outPath = x })
+
+mapMDelayedOutput :: Monad m => (FilePath -> m FilePath) -> DelayedOutput -> m DelayedOutput
+mapMDelayedOutput f output@DelayedOutput{..} = f outputPath >>= \x -> return (output { outputPath = x })
 
 data FSAccessHandlers = FSAccessHandlers
   { delayedFSAccessHandler   :: AccessDoc -> [Input] -> [DelayedOutput] -> IO ()
