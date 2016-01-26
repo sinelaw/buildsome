@@ -37,7 +37,7 @@ catchDoesNotExist act handler =
   else E.throwIO e
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
-getMFileStatus path = do
+getMFileStatus path = {-# SCC "getMFileStatus" #-} do
   doesExist <- FilePath.exists path
   if doesExist
     then (Just <$> Posix.getFileStatus path) `catchDoesNotExist` return Nothing
@@ -84,7 +84,7 @@ getDirectoryContents path =
         else (fn :) <$> go dirStream
 
 getDirectoryContentsHash :: FilePath -> IO Hash
-getDirectoryContentsHash path =
+getDirectoryContentsHash path = {-# SCC "getDirectoryContentsHash" #-}
   bracket (Posix.openDirStream path) Posix.closeDirStream (go Hash.empty)
   where
     go !hash !dirStream = do
