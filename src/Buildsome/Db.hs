@@ -15,15 +15,15 @@ module Buildsome.Db
   , InputDescWith(..)
   , InputDesc, inputDescDropReasons
   , OutputDesc(..)
-  , ExecutionLog, ExecutionLogOf(..)
+  , ExecutionLog, ExecutionLogOf(..), elInputsDescs, ELBranchPath(..)
   , ExecutionLogNode(..)
   , executionLogNode, getExecutionLog
   , executionLogUpdate
   , executionLogLookup
   , latestExecutionLog
-  , FileDescInput
+  , FileDescInput, FileDescInputOf(..)
   , FileContentDescCache(..), fileContentDescCache, bimapFileDesc
-  , Reason(..)
+  , Reason, ReasonOf(..)
   , IRef(..)
   , MFileContentDesc, MakefileParseCache(..), makefileParseCache
   ) where
@@ -129,13 +129,20 @@ data OutputDesc = OutputDesc
   } deriving (Generic, Show, Eq)
 instance Binary OutputDesc
 
+-- This exists so we can derive Functor, etc. on the reason (which we
+-- can't for a simple newtype of FileDesc)
 -- TODO: naming...
 data FileDescInputOf a
     = FileDescInputOfNonExisting (ReasonOf a)
     | FileDescInputOfExisting (POSIXTime, InputDescWith (ReasonOf a))
     deriving (Show, Generic, Functor, Foldable, Traversable)
 instance Binary a => Binary (FileDescInputOf a)
+
 type FileDescInput = FileDescInputOf FilePath
+
+toFileDesc :: FileDescInputOf a -> FileDesc (ReasonOf a) (POSIXTime, InputDescWith (ReasonOf a))
+toFileDesc (FileDescInputOfNonExisting r) = FileDescNonExisting r
+toFileDesc (FileDescInputOfExisting a) = FileDescExisting a
 
 newtype ELBranchPath a = ELBranchPath { unELBranchPath :: [(a, FileDescInputOf a)] }
     deriving (Show, Generic, Functor, Foldable, Traversable)
@@ -148,11 +155,14 @@ splitBranchPathAt x (ELBranchPath p) = (ELBranchPath prefix, ELBranchPath suffix
 data ExecutionLogOf s = ExecutionLogOf
   { elBuildId :: BuildId
   , elCommand :: s
-  , elInputsDescs :: ELBranchPath s
+  , elInputBranchPath :: ELBranchPath s
   , elOutputsDescs :: [(s, (FileDesc () (POSIXTime, OutputDesc)))]
   , elStdoutputs :: StdOutputs s
   , elSelfTime :: DiffTime
   } deriving (Generic, Functor, Foldable, Traversable)
+
+--elInputsDescs :: ExecutionLogOf s -> [(s, FileDescInputOf s)]
+elInputsDescs = map (fmap toFileDesc) . unELBranchPath . elInputBranchPath
 
 type ExecutionLog = ExecutionLogOf ByteString
 type ExecutionLogForDb = ExecutionLogOf StringKey
@@ -276,7 +286,7 @@ targetKey targetLogType target = Hash.md5 $ encode targetLogType <> Makefile.tar
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
 executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ "n:" <> Hash.asByteString k
 
-executionLogLookup :: Makefile.Target -> Db -> ([(FilePath, FileDescInput)] -> EitherT e IO ()) -> (FilePath -> IO FileDescInput) -> IO (Either (Maybe FilePath) ExecutionLog)
+executionLogLookup :: Makefile.Target -> Db -> ([ELBranchPath FilePath] -> EitherT e IO ()) -> (FilePath -> IO FileDescInput) -> IO (Either (Maybe FilePath) ExecutionLog)
 executionLogLookup target db prepareInputs getCurFileDesc = {-# SCC "executionLogLookup" #-} do
     let targetName =
             show $ case Makefile.targetOutputs target of
@@ -344,11 +354,6 @@ executionLogPathCmp (ELBranchPath x) (ELBranchPath y) =
 pathChunkSize :: Int
 pathChunkSize = 50
 
-traverseFileDescInputReason act desc =
-    case desc of
-        FileDescNonExisting reason -> FileDescNonExisting <$> (traverse act reason)
-        FileDescExisting (t, e) -> FileDescExisting . (t,) <$> ((traverse . traverse $ act) e)
-
 getPathStrings :: Db -> ELBranchPath StringKey -> IO (ELBranchPath FilePath)
 getPathStrings db = traverse (getString db)
 
@@ -357,7 +362,7 @@ putPathStrings db = traverse (putString db)
 
 executionLogLookup' ::
     IRef ExecutionLogNode -> Db ->
-    ([(FilePath, FileDescInput)] -> EitherT e IO ()) ->
+    ([ELBranchPath FilePath] -> EitherT e IO ()) ->
     (FilePath -> IO FileDescInput) ->
     EitherT (Maybe FilePath) IO ExecutionLog
 executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
@@ -370,7 +375,7 @@ executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLog
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
             resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> getPathStrings db p) mapOfMaps
             buildInputsRes <- liftIO $ runEitherT $ do
-                prepareInputs $ concatMap (unELBranchPath . fst) resolvedPaths
+                prepareInputs $ map fst resolvedPaths
             case buildInputsRes of
                 Right _ -> return ()
                 Left filePath -> left Nothing
@@ -406,7 +411,7 @@ executionLogInsert db key el path = {-# SCC "executionLogInsert" #-} do
 
 executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ExecutionLogNodeKey
 executionLogUpdate target db el = do
-    path <- putPathStrings db $ elInputsDescs el
+    path <- putPathStrings db $ elInputBranchPath el
     executionLogUpdate' (executionLogNode key db) key db el path
     where
         key = executionLogNodeRootKey target
