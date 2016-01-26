@@ -30,7 +30,7 @@ module Buildsome.Db
 
 import           Buildsome.BuildId (BuildId)
 import           Control.Applicative ((<|>), Alternative(..))
-import           Control.Monad (join, liftM)
+import           Control.Monad (join, liftM, forM)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Control.Monad.Trans.Either (runEitherT, EitherT(..), left)
 import           Data.Binary (Binary(..))
@@ -97,18 +97,19 @@ data FileContentDescCache = FileContentDescCache
   } deriving (Generic, Show)
 instance Binary FileContentDescCache
 
-data Reason
-  = BecauseSpeculative Reason
-  | BecauseHintFrom [FilePath]
+data ReasonOf a
+  = BecauseSpeculative (ReasonOf a)
+  | BecauseHintFrom [a]
   | BecauseHooked FSHook.AccessDoc
-  | BecauseChildOfFullyRequestedDirectory Reason
-  | BecauseContainerDirectoryOfInput Reason FilePath
-  | BecauseContainerDirectoryOfOutput FilePath
-  | BecauseInput Reason FilePath
+  | BecauseChildOfFullyRequestedDirectory (ReasonOf a)
+  | BecauseContainerDirectoryOfInput (ReasonOf a) a
+  | BecauseContainerDirectoryOfOutput a
+  | BecauseInput (ReasonOf a) a
   | BecauseRequested ByteString
-  deriving (Generic, Show, Ord, Eq)
-instance Binary Reason
+  deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
+instance Binary a => Binary (ReasonOf a)
 
+type Reason = ReasonOf FilePath
 
 data InputDescWith a = InputDescWith
   { idModeAccess :: Maybe (a, FileModeDesc)
@@ -117,7 +118,7 @@ data InputDescWith a = InputDescWith
   } deriving (Generic, Show, Ord, Eq, Functor)
 instance Binary a => Binary (InputDescWith a)
 
-type InputDesc = InputDescWith Reason
+type InputDesc = InputDescWith (ReasonOf FilePath)
 
 inputDescDropReasons :: InputDesc -> InputDescWith ()
 inputDescDropReasons = fmap (const ())
@@ -129,7 +130,8 @@ data OutputDesc = OutputDesc
 instance Binary OutputDesc
 
 -- TODO: naming...
-type FileDescInput = FileDesc Reason (POSIXTime, InputDesc)
+type FileDescInputOf a = FileDesc (ReasonOf a) (POSIXTime, InputDescWith (ReasonOf a))
+type FileDescInput = FileDescInputOf FilePath
 
 data ExecutionLogOf s = ExecutionLogOf
   { elBuildId :: BuildId
@@ -149,10 +151,10 @@ newtype ExecutionLogNodeKey = ExecutionLogNodeKey Hash -- [(FilePath, FileDescIn
   deriving (Generic, Show)
 instance Binary ExecutionLogNodeKey
 
-type ELBranchPath = [(StringKey, FileDescInput)]
+type ELBranchPath a = [(a, FileDescInputOf a)]
 
 data ExecutionLogNode
-  = ExecutionLogNodeBranch [(ELBranchPath, ExecutionLogNodeKey)]
+  = ExecutionLogNodeBranch [(ELBranchPath StringKey, ExecutionLogNodeKey)]
   | ExecutionLogNodeLeaf ExecutionLogForDb
   deriving (Generic)
 instance Binary ExecutionLogNode
@@ -237,8 +239,8 @@ updateString db k s act = join $ atomicModifyIORef' (dbStrings db) $ \smap ->
       Nothing -> (Map.insert k s smap, act)
       Just _ -> (smap, return ())
 
-getString :: StringKey -> Db -> IO ByteString
-getString k db = {-# SCC "getString" #-} do
+getString :: Db -> StringKey -> IO ByteString
+getString db k = {-# SCC "getString" #-} do
     smap <- readIORef $ dbStrings db
     case Map.lookup k smap of
         Nothing -> do
@@ -281,7 +283,7 @@ maybeCmp :: Cmp a => Maybe a -> Maybe a -> Bool
 maybeCmp (Just x) (Just y) = Cmp.Equals == (x `cmp` y)
 maybeCmp _        _        = True
 
-cmpFileDescInput :: FileDescInput -> FileDescInput -> Bool
+cmpFileDescInput :: FileDescInputOf r -> FileDescInputOf r -> Bool
 cmpFileDescInput (FileDescExisting (_, a)) (FileDescExisting (_, b))   =
   maybeCmp' (idModeAccess a) (idModeAccess b)
   && maybeCmp' (idStatAccess a) (idStatAccess b)
@@ -293,7 +295,7 @@ cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
 cmpFileDescInput _                    _                      = False
 
 getExecutionLog :: Db -> ExecutionLogForDb -> IO ExecutionLog
-getExecutionLog db = traverse (flip getString db)
+getExecutionLog db = traverse (getString db)
 
 putExecutionLog :: Db -> ExecutionLog -> IO ExecutionLogForDb
 putExecutionLog db = traverse (flip putString db)
@@ -316,17 +318,16 @@ firstRight = foldr firstRightAlt (left Nothing)
 
 executionLogPathCheck ::
     (MonadIO m) =>
-    Db -> (ByteString -> IO FileDescInput) -> [(StringKey, FileDescInput)]
+    Db -> (ByteString -> IO FileDescInput) -> ELBranchPath FilePath
     -> EitherT (Maybe FilePath) m ()
 executionLogPathCheck db getCurFileDesc path = {-# SCC "executionLogPathCheck" #-}
-    allRight $ flip map path $ \(filePathKey, expectedFileDesc) -> do
-        filePath <- liftIO $ getString filePathKey db
+    allRight $ flip map path $ \(filePath, expectedFileDesc) -> do
         curFileDesc <- liftIO $ getCurFileDesc filePath
         if cmpFileDescInput curFileDesc expectedFileDesc
             then return $ Right ()
             else return $ Left (Just filePath)
 
-executionLogPathCmp :: ELBranchPath -> ELBranchPath -> Bool
+executionLogPathCmp :: ELBranchPath StringKey -> ELBranchPath StringKey -> Bool
 executionLogPathCmp x y = all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ zip x y
 
 pathChunkSize :: Int
@@ -345,21 +346,29 @@ executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLog
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
             liftIO $ getExecutionLog db el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
+            let resolveStrings :: (ELBranchPath StringKey) -> IO (ELBranchPath FilePath)
+                resolveStrings path = forM path $ \(filePathKey, desc) -> do
+                    filePath <- getString db filePathKey
+                    desc' <-
+                        case desc of
+                            FileDescNonExisting reason -> FileDescNonExisting <$> (traverse (getString db) reason)
+                            FileDescExisting (t, e) -> FileDescExisting . (t,) <$> ((traverse . traverse $ getString db) e)
+                    return (filePath, desc')
+            resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> resolveStrings p) mapOfMaps
             buildInputsRes <- liftIO $ runEitherT $ do
-                fileDescs <- liftIO $ mapM (\(f,d) -> (,d) <$> getString f db) $ concatMap fst mapOfMaps
-                prepareInputs fileDescs
+                prepareInputs $ concatMap fst resolvedPaths
             case buildInputsRes of
                 Right _ -> return ()
                 Left filePath -> left Nothing
             mTarget <-
                 runEitherT $ firstRight
-                $ flip map mapOfMaps $ \(path, t) ->
+                $ flip map resolvedPaths $ \(path, t) ->
                     (executionLogPathCheck db getCurFileDesc path >> pure t)
             case mTarget of
                 Right target -> executionLogLookup' (executionLogNode target db) db prepareInputs getCurFileDesc
                 Left mFilePath -> left mFilePath
 
-executionLogNodeKey :: ExecutionLogNodeKey -> [(StringKey, FileDescInput)] -> ExecutionLogNodeKey
+executionLogNodeKey :: ExecutionLogNodeKey -> [(StringKey, FileDescInputOf StringKey)] -> ExecutionLogNodeKey
 executionLogNodeKey (ExecutionLogNodeKey oldKey) is = ExecutionLogNodeKey $ oldKey <> mconcat (map (\(sk, x) -> fromStringKey sk <> Hash.md5 (encode x)) is)
 
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
