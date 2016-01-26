@@ -115,7 +115,7 @@ data InputDescWith a = InputDescWith
   { idModeAccess :: Maybe (a, FileModeDesc)
   , idStatAccess :: Maybe (a, FileStatDesc)
   , idContentAccess :: Maybe (a, FileContentDesc)
-  } deriving (Generic, Show, Ord, Eq, Functor)
+  } deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance Binary a => Binary (InputDescWith a)
 
 type InputDesc = InputDescWith (ReasonOf FilePath)
@@ -130,13 +130,25 @@ data OutputDesc = OutputDesc
 instance Binary OutputDesc
 
 -- TODO: naming...
-type FileDescInputOf a = FileDesc (ReasonOf a) (POSIXTime, InputDescWith (ReasonOf a))
+data FileDescInputOf a
+    = FileDescInputOfNonExisting (ReasonOf a)
+    | FileDescInputOfExisting (POSIXTime, InputDescWith (ReasonOf a))
+    deriving (Show, Generic, Functor, Foldable, Traversable)
+instance Binary a => Binary (FileDescInputOf a)
 type FileDescInput = FileDescInputOf FilePath
+
+newtype ELBranchPath a = ELBranchPath { unELBranchPath :: [(a, FileDescInputOf a)] }
+    deriving (Show, Generic, Functor, Foldable, Traversable)
+instance Binary a => Binary (ELBranchPath a)
+
+splitBranchPathAt :: Int -> ELBranchPath a -> (ELBranchPath a, ELBranchPath a)
+splitBranchPathAt x (ELBranchPath p) = (ELBranchPath prefix, ELBranchPath suffix)
+    where (prefix, suffix) = List.splitAt x p
 
 data ExecutionLogOf s = ExecutionLogOf
   { elBuildId :: BuildId
   , elCommand :: s
-  , elInputsDescs :: [(s, FileDescInput)]
+  , elInputsDescs :: ELBranchPath s
   , elOutputsDescs :: [(s, (FileDesc () (POSIXTime, OutputDesc)))]
   , elStdoutputs :: StdOutputs s
   , elSelfTime :: DiffTime
@@ -150,8 +162,6 @@ deriving instance Show (ExecutionLogOf ByteString)
 newtype ExecutionLogNodeKey = ExecutionLogNodeKey Hash -- [(FilePath, FileDescInputNoReasons)]
   deriving (Generic, Show)
 instance Binary ExecutionLogNodeKey
-
-type ELBranchPath a = [(a, FileDescInputOf a)]
 
 data ExecutionLogNode
   = ExecutionLogNodeBranch [(ELBranchPath StringKey, ExecutionLogNodeKey)]
@@ -252,8 +262,8 @@ getString db k = {-# SCC "getString" #-} do
         mustExist Nothing = error $ "Corrupt DB? Missing string for key: " <> show k
         mustExist (Just s) = s
 
-putString :: ByteString -> Db -> IO StringKey
-putString s db = {-# SCC "putString" #-} do
+putString :: Db -> ByteString -> IO StringKey
+putString db s = {-# SCC "putString" #-} do
   _ <- updateString db k s $ writeIRef (string k db) s
   return k
   where
@@ -284,21 +294,21 @@ maybeCmp (Just x) (Just y) = Cmp.Equals == (x `cmp` y)
 maybeCmp _        _        = True
 
 cmpFileDescInput :: FileDescInputOf r -> FileDescInputOf r -> Bool
-cmpFileDescInput (FileDescExisting (_, a)) (FileDescExisting (_, b))   =
+cmpFileDescInput (FileDescInputOfExisting (_, a)) (FileDescInputOfExisting (_, b))   =
   maybeCmp' (idModeAccess a) (idModeAccess b)
   && maybeCmp' (idStatAccess a) (idStatAccess b)
   && maybeCmp' (idContentAccess a) (idContentAccess b)
   where
     maybeCmp' x y = maybeCmp (snd <$> x) (snd <$> y)
 
-cmpFileDescInput FileDescNonExisting{} FileDescNonExisting{} = True
-cmpFileDescInput _                    _                      = False
+cmpFileDescInput FileDescInputOfNonExisting{} FileDescInputOfNonExisting{} = True
+cmpFileDescInput _                            _                            = False
 
 getExecutionLog :: Db -> ExecutionLogForDb -> IO ExecutionLog
-getExecutionLog db = traverse (getString db)
+getExecutionLog = traverse . getString
 
 putExecutionLog :: Db -> ExecutionLog -> IO ExecutionLogForDb
-putExecutionLog db = traverse (flip putString db)
+putExecutionLog = traverse . putString
 
 allRight :: Monad m => [m (Either e a)] -> EitherT e m ()
 allRight = foldr (>>) (return ()) . map EitherT
@@ -320,7 +330,7 @@ executionLogPathCheck ::
     (MonadIO m) =>
     Db -> (ByteString -> IO FileDescInput) -> ELBranchPath FilePath
     -> EitherT (Maybe FilePath) m ()
-executionLogPathCheck db getCurFileDesc path = {-# SCC "executionLogPathCheck" #-}
+executionLogPathCheck db getCurFileDesc (ELBranchPath path) = {-# SCC "executionLogPathCheck" #-}
     allRight $ flip map path $ \(filePath, expectedFileDesc) -> do
         curFileDesc <- liftIO $ getCurFileDesc filePath
         if cmpFileDescInput curFileDesc expectedFileDesc
@@ -328,10 +338,22 @@ executionLogPathCheck db getCurFileDesc path = {-# SCC "executionLogPathCheck" #
             else return $ Left (Just filePath)
 
 executionLogPathCmp :: ELBranchPath StringKey -> ELBranchPath StringKey -> Bool
-executionLogPathCmp x y = all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ zip x y
+executionLogPathCmp (ELBranchPath x) (ELBranchPath y) =
+    all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ zip x y
 
 pathChunkSize :: Int
 pathChunkSize = 50
+
+traverseFileDescInputReason act desc =
+    case desc of
+        FileDescNonExisting reason -> FileDescNonExisting <$> (traverse act reason)
+        FileDescExisting (t, e) -> FileDescExisting . (t,) <$> ((traverse . traverse $ act) e)
+
+getPathStrings :: Db -> ELBranchPath StringKey -> IO (ELBranchPath FilePath)
+getPathStrings db = traverse (getString db)
+
+putPathStrings :: Db -> ELBranchPath FilePath -> IO (ELBranchPath StringKey)
+putPathStrings db = traverse (putString db)
 
 executionLogLookup' ::
     IRef ExecutionLogNode -> Db ->
@@ -346,17 +368,9 @@ executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLog
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
             liftIO $ getExecutionLog db el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
-            let resolveStrings :: (ELBranchPath StringKey) -> IO (ELBranchPath FilePath)
-                resolveStrings path = forM path $ \(filePathKey, desc) -> do
-                    filePath <- getString db filePathKey
-                    desc' <-
-                        case desc of
-                            FileDescNonExisting reason -> FileDescNonExisting <$> (traverse (getString db) reason)
-                            FileDescExisting (t, e) -> FileDescExisting . (t,) <$> ((traverse . traverse $ getString db) e)
-                    return (filePath, desc')
-            resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> resolveStrings p) mapOfMaps
+            resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> getPathStrings db p) mapOfMaps
             buildInputsRes <- liftIO $ runEitherT $ do
-                prepareInputs $ concatMap fst resolvedPaths
+                prepareInputs $ concatMap (unELBranchPath . fst) resolvedPaths
             case buildInputsRes of
                 Right _ -> return ()
                 Left filePath -> left Nothing
@@ -368,17 +382,18 @@ executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLog
                 Right target -> executionLogLookup' (executionLogNode target db) db prepareInputs getCurFileDesc
                 Left mFilePath -> left mFilePath
 
-executionLogNodeKey :: ExecutionLogNodeKey -> [(StringKey, FileDescInputOf StringKey)] -> ExecutionLogNodeKey
-executionLogNodeKey (ExecutionLogNodeKey oldKey) is = ExecutionLogNodeKey $ oldKey <> mconcat (map (\(sk, x) -> fromStringKey sk <> Hash.md5 (encode x)) is)
+executionLogNodeKey :: ExecutionLogNodeKey -> ELBranchPath StringKey -> ExecutionLogNodeKey
+executionLogNodeKey (ExecutionLogNodeKey oldKey) (ELBranchPath is) =
+    ExecutionLogNodeKey $ oldKey <> mconcat (map (\(sk, x) -> fromStringKey sk <> Hash.md5 (encode x)) is)
 
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
 
-executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> [(StringKey, FileDescInput)] -> IO ExecutionLogNodeKey
+executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> ELBranchPath StringKey -> IO ExecutionLogNodeKey
 executionLogInsert db key el path = {-# SCC "executionLogInsert" #-} do
-    debugPrint $ "executionLogInsert: inputsLeft: " <> (show $ length path)
-    let (prefix, suffix) = List.splitAt pathChunkSize path
-    case prefix of
+    debugPrint $ "executionLogInsert: inputsLeft: " <> (show $ length $ unELBranchPath path)
+    let (prefix, suffix) = splitBranchPathAt pathChunkSize path
+    case unELBranchPath prefix of
         [] -> do
             eldb <- putExecutionLog db el
             writeIRef (executionLogNode key db) $ ExecutionLogNodeLeaf eldb
@@ -391,15 +406,15 @@ executionLogInsert db key el path = {-# SCC "executionLogInsert" #-} do
 
 executionLogUpdate :: Makefile.Target -> Db -> ExecutionLog -> IO ExecutionLogNodeKey
 executionLogUpdate target db el = do
-    path <- mapM (\(fp, x) -> (,x) <$> putString fp db) (elInputsDescs el)
+    path <- putPathStrings db $ elInputsDescs el
     executionLogUpdate' (executionLogNode key db) key db el path
     where
         key = executionLogNodeRootKey target
 
 
 executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
-                       -> [(StringKey, FileDescInput)] -> IO ExecutionLogNodeKey
-executionLogUpdate' iref key db el [] = do
+                       -> ELBranchPath StringKey -> IO ExecutionLogNodeKey
+executionLogUpdate' iref key db el (ELBranchPath []) = do
     -- TODO validate current iref key matches inputsPassed?
     eldb <- putExecutionLog db el
     writeIRef iref (ExecutionLogNodeLeaf eldb)
@@ -410,7 +425,7 @@ executionLogUpdate' iref key db el inputsLeft = {-# SCC "executionLogUpdate'_bra
         Nothing -> executionLogInsert db key el inputsLeft
         Just ExecutionLogNodeLeaf{} -> error "wat? Got leaf when more inputs to add..." -- TODO
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
-            let (prefix, suffix) = List.splitAt pathChunkSize inputsLeft
+            let (prefix, suffix) = splitBranchPathAt pathChunkSize inputsLeft
             case filter (executionLogPathCmp prefix . fst) mapOfMaps of
                 [] -> do
                     let nextKey = executionLogNodeKey key prefix
