@@ -88,7 +88,7 @@ data Db = Db
   { dbLevel :: LevelDB.DB
   , dbRegisteredOutputs :: IORef (Set FilePath)
   , dbLeakedOutputs :: IORef (Set FilePath)
-  , dbStrings :: IORef (Map StringKey ByteString)
+  , dbStrings :: IORef (Map Hash ByteString)
   }
 
 data FileContentDescCache = FileContentDescCache
@@ -252,21 +252,26 @@ mkIRefKey key db = IRef
   , delIRef = {-# SCC "deleteKey" #-} deleteKey db key
   }
 
-newtype StringKey = StringKey { fromStringKey :: Hash }
+data StringKey = StringKey Hash | StringKeyShort ByteString
   deriving (Generic, Show, Eq, Ord)
 instance Binary StringKey
 
-string :: StringKey -> Db -> IRef ByteString
-string (StringKey k) = mkIRefKey $ "s:" <> Hash.asByteString k
+fromStringKey :: StringKey -> Hash
+fromStringKey (StringKey h) = h
+fromStringKey (StringKeyShort s) = Hash.Hash s
 
-updateString :: Db -> StringKey -> ByteString -> IO () -> IO ()
+string :: Hash -> Db -> IRef ByteString
+string k = mkIRefKey $ "s:" <> Hash.asByteString k
+
+updateString :: Db -> Hash -> ByteString -> IO () -> IO ()
 updateString db k s act = join $ atomicModifyIORef' (dbStrings db) $ \smap ->
   case Map.lookup k smap of
       Nothing -> (Map.insert k s smap, act)
       Just _ -> (smap, return ())
 
 getString :: Db -> StringKey -> IO ByteString
-getString db k = {-# SCC "getString" #-} do
+getString _  (StringKeyShort s) = return s
+getString db (StringKey k)      = {-# SCC "getString" #-} do
     smap <- readIORef $ dbStrings db
     case Map.lookup k smap of
         Nothing -> do
@@ -279,11 +284,13 @@ getString db k = {-# SCC "getString" #-} do
         mustExist (Just s) = s
 
 putString :: Db -> ByteString -> IO StringKey
-putString db s = {-# SCC "putString" #-} do
-  _ <- updateString db k s $ writeIRef (string k db) s
-  return k
-  where
-    k = StringKey (Hash.md5 s)
+putString db s = {-# SCC "putString" #-}
+  if BS8.length s <= 16
+  then return $ StringKeyShort s
+  else do
+      let k = Hash.md5 s
+      _ <- updateString db k s $ writeIRef (string k db) s
+      return $ StringKey k
 
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> Hash
