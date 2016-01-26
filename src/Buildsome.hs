@@ -704,34 +704,25 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = {-# SCC "tryLoadLatest
 
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput mLatestExecutionLog = {-# SCC "findApplyExecutionLog" #-} do
-  mExecutionLog <- Db.executionLogLookup tdTarget db (getFileDescInput db)
+  builtTargetsRef <- newIORef mempty
+  let buildInputs inputs =
+          makeImplicitInputs builtTargetsRef bte entity
+          (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
+          -- AccessType is wrong here, nor we can we (rather
+          -- arbitrarily) use 'full' because it will fail on
+          -- directories that have patterns
+          (map (FSHook.Input FSHook.AccessTypeStat) inputs)
+          []
+
+  mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (getFileDescInput db)
   case mExecutionLog of
     Left Nothing -> handleCacheMiss
-    Left (Just missingInput) ->
-      if retryingBecauseOfInput == Just missingInput
-      then handleCacheMiss
-      else do
-          -- The execution log wasn't found because some input file
-          -- didn't match (and the search stopped there).  Rather than
-          -- trying to build just that input and the restarting the
-          -- search, we load the 'latest' execution log of this target
-          -- and guess that all the inputs there will need to be
-          -- built, and THEN retry the search hoping that this time
-          -- we'll reach the leaf node.
-          mEL <- getLatest
-          let otherMissingInputs =
-                  case mEL of
-                  Nothing -> []
-                  Just el -> map fst $ Db.elInputsDescs el
-          builtTargetsRef <- newIORef mempty
-          makeImplicitInputs builtTargetsRef bte entity
-            (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
-            -- AccessType is wrong here, nor we can we (rather
-            -- arbitrarily) use 'full' because it will fail on
-            -- directories that have patterns
-            (map (FSHook.Input FSHook.AccessTypeStat) (missingInput:otherMissingInputs))
-            []
-          findApplyExecutionLog' bte entity targetDesc (Just missingInput) mEL -- TODO prevent infinite loops
+    Left (Just missingInput) -> do
+      verbosePrint bte . mconcat $
+        [ "Mismatching input while searching for cached execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
+        , cPath (show missingInput)
+        ]
+      handleCacheMiss
     Right executionLog -> applyExecutionLog executionLog
   where
     Color.Scheme{..} = Color.scheme
@@ -768,7 +759,6 @@ findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} r
       case mEL of
           Nothing -> return Nothing
           Just executionLog -> applyExecutionLog executionLog
-
 
 data TargetDependencyLoop = TargetDependencyLoop (ColorText -> ByteString) Parents
   deriving (Typeable)
