@@ -268,14 +268,14 @@ targetKey targetLogType target = Hash.md5 $ encode targetLogType <> Makefile.tar
 executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
 executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ "n:" <> Hash.asByteString k
 
-executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
-executionLogLookup target db getCurFileDesc = {-# SCC "executionLogLookup" #-} do
+executionLogLookup :: Makefile.Target -> Db -> ([FilePath] -> IO ()) -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
+executionLogLookup target db prepareInputs getCurFileDesc = {-# SCC "executionLogLookup" #-} do
     let targetName =
             show $ case Makefile.targetOutputs target of
                    [] -> error "empty target?!"
                    (x:_) -> x
     debugPrint $ "executionLogLookup: looking up " <> targetName
-    res <- runEitherT $ executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db getCurFileDesc
+    res <- runEitherT $ executionLogLookup' (executionLogNode (executionLogNodeRootKey target) db) db prepareInputs getCurFileDesc
     case res of
         Left f -> debugPrint $ "not found, missing: " <> show f
         Right _ -> debugPrint "FOUND"
@@ -336,8 +336,12 @@ executionLogPathCmp x y = all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInp
 pathChunkSize :: Int
 pathChunkSize = 50
 
-executionLogLookup' :: IRef ExecutionLogNode -> Db -> (FilePath -> IO FileDescInputNoReasons) -> EitherT (Maybe FilePath) IO ExecutionLog
-executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
+executionLogLookup' ::
+    IRef ExecutionLogNode -> Db ->
+    ([FilePath] -> IO ()) ->
+    (FilePath -> IO FileDescInputNoReasons) ->
+    EitherT (Maybe FilePath) IO ExecutionLog
+executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLogLookup'" #-} do
     eln <- liftIO $ readIRef iref
     case eln of
         Nothing -> left Nothing
@@ -345,12 +349,13 @@ executionLogLookup' iref db getCurFileDesc = {-# SCC "executionLogLookup'" #-} d
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
             liftIO $ getExecutionLog db el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
+            liftIO $ (mapM (flip getString db . fst) $ concatMap fst mapOfMaps) >>= prepareInputs
             mTarget <-
                 runEitherT $ firstRight
                 $ flip map mapOfMaps $ \(path, t) ->
                     (executionLogPathCheck db getCurFileDesc path >> pure t)
             case mTarget of
-                Right target -> executionLogLookup' (executionLogNode target db) db getCurFileDesc
+                Right target -> executionLogLookup' (executionLogNode target db) db prepareInputs getCurFileDesc
                 Left mFilePath -> left mFilePath
 
 executionLogNodeKey :: ExecutionLogNodeKey -> [(StringKey, FileDescInputNoReasons)] -> ExecutionLogNodeKey
