@@ -593,12 +593,12 @@ getFileDescInput :: MonadIO m => Db.Db -> Reason -> FilePath -> m Db.FileDescInp
 getFileDescInput db reason filePath = {-# SCC "getFileDescInput" #-} do
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case mStat of
-      Nothing -> return $ FileDescNonExisting reason
+      Nothing -> return $ Db.FileDescInputOfNonExisting reason
       Just stat -> do
           contentDesc <- liftIO $ fileContentDescOfStat "wat" db filePath stat
           let time = Posix.modificationTimeHiRes stat
           return
-              $ FileDescExisting . (time,) $ Db.InputDescWith
+              $ Db.FileDescInputOfExisting . (time,) $ Db.InputDescWith
               { idModeAccess = Just (reason, fileModeDescOfStat stat)
               , idStatAccess = Just (reason, fileStatDescOfStat stat)
               , idContentAccess = Just (reason, contentDesc)
@@ -626,12 +626,12 @@ executionLogVerifyFilesState ::
   MonadIO m =>
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
-executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLogOf{..} = {-# SCC "executionLogVerifyFilesState" #-} do
-  verifyInputDescs db bte TargetDesc{..} elInputsDescs
+executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} el@Db.ExecutionLogOf{..} = {-# SCC "executionLogVerifyFilesState" #-} do
+  verifyInputDescs db bte TargetDesc{..} $ Db.elInputsDescs el
   verifyOutputDescs db bte TargetDesc{..} elOutputsDescs
   liftIO $
     replayExecutionLog bte tdTarget
-    (S.fromList $ map fst elInputsDescs) (S.fromList $ map fst elOutputsDescs)
+    (S.fromList $ map fst $ Db.elInputsDescs el) (S.fromList $ map fst elOutputsDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
@@ -1077,7 +1077,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = {-# SCC "
   return Db.ExecutionLogOf
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
-    , elInputsDescs = M.toList inputsDescs
+    , elInputBranchPath = Db.ELBranchPath $ M.toList inputsDescs
     , elOutputsDescs = outputDescPairs
     , elStdoutputs = stdOutputs
     , elSelfTime = selfTime
@@ -1201,7 +1201,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} = {-# SCC "buildTarget"
         return $ statsOfNullCmd bte TargetDesc{..} hintedBuiltTargets
       ExplicitPathsBuilt | otherwise ->  {-# SCC "buildTarget.ExplicitPathsBuilt" #-} do
         mSlaveStats <- findApplyExecutionLog bte entity TargetDesc{..}
-        (whenBuilt, (Db.ExecutionLogOf{..}, builtTargets)) <-
+        (whenBuilt, (el@Db.ExecutionLogOf{..}, builtTargets)) <-
           case mSlaveStats of
           Just res -> return (Stats.FromCache, res)
           Nothing -> (,) Stats.BuiltNow <$> buildTargetReal bte entity TargetDesc{..}
@@ -1222,7 +1222,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} = {-# SCC "buildTarget"
                     , tsExistingInputs =
                       case putInputsInStats of
                       PutInputsInStats ->
-                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- elInputsDescs ]
+                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- Db.elInputsDescs el ]
                       Don'tPutInputsInStats -> Nothing
                     }
                   , Stats.stdErr =
