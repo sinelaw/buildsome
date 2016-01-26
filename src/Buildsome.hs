@@ -556,13 +556,13 @@ verifyDesc str getDesc oldDesc = do
 
 verifyOutputDescs ::
     MonadIO m => Db -> BuildTargetEnv -> TargetDesc ->
-    Map FilePath (FileDesc ne (POSIXTime, Db.OutputDesc)) ->
+    [(FilePath, (FileDesc ne (POSIXTime, Db.OutputDesc)))] ->
     EitherT (ByteString, FilePath) m ()
 verifyOutputDescs db bte@BuildTargetEnv{..} TargetDesc{..} esOutputsDescs = {-# SCC "verifyOutputDescs" #-} do
   -- For now, we don't store the output files' content
   -- anywhere besides the actual output files, so just verify
   -- the output content is still correct
-  forM_ (M.toList esOutputsDescs) $ \(filePath, outputDesc) -> do
+  forM_ esOutputsDescs $ \(filePath, outputDesc) -> do
       annotateError filePath $
         verifyOutputDesc bte filePath outputDesc $
         \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
@@ -602,10 +602,10 @@ getFileDescInput db filePath = {-# SCC "getFileDescInput" #-} do
 verifyInputDescs ::
   MonadIO f =>
   Db -> BuildTargetEnv -> TargetDesc ->
-  Map FilePath (FileDesc ne (POSIXTime, Db.InputDesc)) ->
+  [(FilePath, (FileDesc ne (POSIXTime, Db.InputDesc)))] ->
   EitherT (ByteString, FilePath) f ()
 verifyInputDescs db BuildTargetEnv{..} TargetDesc{..} elInputsDescs = {-# SCC "verifyInputDescs" #-} do
-  forM_ (M.toList elInputsDescs) $ \(filePath, desc) ->
+  forM_ elInputsDescs $ \(filePath, desc) ->
     annotateError filePath $
       verifyFileDesc "input" filePath desc $ \stat (mtime, Db.InputDescWith mModeAccess mStatAccess mContentAccess) ->
         when (Posix.modificationTimeHiRes stat /= mtime) $ do
@@ -622,13 +622,11 @@ executionLogVerifyFilesState ::
   BuildTargetEnv -> TargetDesc -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
 executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} Db.ExecutionLogOf{..} = {-# SCC "executionLogVerifyFilesState" #-} do
-  let mapInputDescs = M.fromList elInputsDescs
-  let mapOutputDescs = M.fromList elOutputsDescs
-  verifyInputDescs db bte TargetDesc{..} mapInputDescs
-  verifyOutputDescs db bte TargetDesc{..} mapOutputDescs
+  verifyInputDescs db bte TargetDesc{..} elInputsDescs
+  verifyOutputDescs db bte TargetDesc{..} elOutputsDescs
   liftIO $
     replayExecutionLog bte tdTarget
-    (M.keysSet mapInputDescs) (M.keysSet mapOutputDescs)
+    (S.fromList $ map fst elInputsDescs) (S.fromList $ map fst elOutputsDescs)
     elStdoutputs elSelfTime
   where
     db = bsDb bteBuildsome
