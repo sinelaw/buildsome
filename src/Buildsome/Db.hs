@@ -169,10 +169,10 @@ leakedOutputsRef :: Db -> IORef (Set FilePath)
 leakedOutputsRef = dbLeakedOutputs
 
 setKey :: Binary a => Db -> ByteString -> a -> IO ()
-setKey db key val = LevelDB.put (dbLevel db) def key $ encode val
+setKey db key val = {-# SCC "setKey" #-} LevelDB.put (dbLevel db) def key $ {-# SCC "setKey.encode" #-} encode val
 
 getKey :: Binary a => Db -> ByteString -> IO (Maybe a)
-getKey db key = fmap decode <$> LevelDB.get (dbLevel db) def key
+getKey db key = {-# SCC "getKey" #-} fmap decode <$> {-# SCC "getKey.get" #-} LevelDB.get (dbLevel db) def key
 
 deleteKey :: Db -> ByteString -> IO ()
 deleteKey db = LevelDB.delete (dbLevel db) def
@@ -242,7 +242,7 @@ updateString db k s act = join $ atomicModifyIORef' (dbStrings db) $ \smap ->
       Just _ -> (smap, return ())
 
 getString :: StringKey -> Db -> IO ByteString
-getString k db = do
+getString k db = {-# SCC "getString" #-} do
     smap <- readIORef $ dbStrings db
     case Map.lookup k smap of
         Nothing -> do
@@ -255,7 +255,7 @@ getString k db = do
         mustExist (Just s) = s
 
 putString :: ByteString -> Db -> IO StringKey
-putString s db = do
+putString s db = {-# SCC "putString" #-} do
   _ <- updateString db k s $ writeIRef (string k db) s
   return k
   where
@@ -269,7 +269,7 @@ executionLogNode :: ExecutionLogNodeKey -> Db -> IRef ExecutionLogNode
 executionLogNode (ExecutionLogNodeKey k) = mkIRefKey $ "n:" <> Hash.asByteString k
 
 executionLogLookup :: Makefile.Target -> Db -> (FilePath -> IO FileDescInputNoReasons) -> IO (Either (Maybe FilePath) ExecutionLog)
-executionLogLookup target db getCurFileDesc = do
+executionLogLookup target db getCurFileDesc = {-# SCC "executionLogLookup" #-} do
     let targetName =
             show $ case Makefile.targetOutputs target of
                    [] -> error "empty target?!"
@@ -322,7 +322,7 @@ executionLogPathCheck ::
     (MonadIO m) =>
     Db -> (ByteString -> IO FileDescInputNoReasons) -> [(StringKey, FileDescInputNoReasons)]
     -> EitherT (Maybe FilePath) m ()
-executionLogPathCheck db getCurFileDesc path =
+executionLogPathCheck db getCurFileDesc path = {-# SCC "executionLogPathCheck" #-}
     allRight $ flip map path $ \(filePathKey, expectedFileDesc) -> do
         filePath <- liftIO $ getString filePathKey db
         curFileDesc <- liftIO $ getCurFileDesc filePath

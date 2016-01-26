@@ -14,7 +14,7 @@ import qualified Lib.FileDesc as FileDesc
 import qualified System.Posix.ByteString as Posix
 
 fileContentDescOfStat :: String -> Db -> FilePath -> Posix.FileStatus -> IO FileContentDesc
-fileContentDescOfStat msgPrefix db path stat = do
+fileContentDescOfStat msgPrefix db path stat = {-# SCC "FileContentDescCache.fileContentDescOfStat" #-} do
   mDescCache <- Db.readIRef cacheIRef
   case mDescCache of
     Just oldCache

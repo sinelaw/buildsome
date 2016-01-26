@@ -204,7 +204,7 @@ sendGo conn = void $ SockBS.send conn (BS8.pack "GO")
 
 {-# INLINE handleJobMsg #-}
 handleJobMsg :: String -> Socket -> RunningJob -> Protocol.Msg -> IO ()
-handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
+handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) = {-# SCC "handleJobMsg" #-}
   case func of
     -- TODO: If any of these outputs are NOT also mode-only inputs on
     -- their file paths, don't use handleOutputs so that we don't
@@ -296,7 +296,7 @@ withRegistered registry key val =
     unregister = atomicModifyIORef_ registry $ M.delete key
 
 handleJobConnection :: String -> Socket -> RunningJob -> Need -> IO ()
-handleJobConnection tidStr conn job _need = do
+handleJobConnection tidStr conn job _need = {-# SCC "handleJobConnection" #-} do
   -- This lets us know for sure that by the time the slave dies,
   -- we've seen its connection
   connId <- Fresh.next $ jobFreshConnIds job
@@ -329,7 +329,7 @@ mkEnvVars fsHook rootFilter jobId =
 timedRunCommand ::
   FSHook -> FilePath -> [String] -> CmdSpec -> JobLabel -> ColorText ->
   FSAccessHandlers -> IO (NominalDiffTime, (ExitCode, StdOutputs ByteString))
-timedRunCommand fsHook rootFilter inheritEnvs cmdSpec label labelColorText fsAccessHandlers = do
+timedRunCommand fsHook rootFilter inheritEnvs cmdSpec label labelColorText fsAccessHandlers = {-# SCC "timedRunCommand" #-} do
   pauseTimeRef <- newIORef 0
   let
     addPauseTime delta = atomicModifyIORef'_ pauseTimeRef (+delta)
@@ -368,7 +368,7 @@ withRunningJob fsHook jobId job body = do
 runCommand ::
   FSHook -> FilePath -> [String] -> CmdSpec -> JobLabel -> ColorText ->
   FSAccessHandlers -> IO (ExitCode, StdOutputs ByteString)
-runCommand fsHook rootFilter inheritEnvs cmdSpec label labelColorText fsAccessHandlers =
+runCommand fsHook rootFilter inheritEnvs cmdSpec label labelColorText fsAccessHandlers = {-# SCC "runCommand" #-}
   do
     activeConnections <- newIORef M.empty
     freshConnIds <- Fresh.new 0
