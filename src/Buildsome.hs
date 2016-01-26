@@ -508,16 +508,21 @@ data ExecutionLogFailure
   = MismatchedFiles (ByteString, FilePath)
   | SpeculativeBuildFailure E.SomeException
 
+executionLogBuildInputsSpeculative ::
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> [(FilePath, Db.FileDescInput)] ->
+  EitherT ExecutionLogFailure IO BuiltTargets
+executionLogBuildInputsSpeculative bte@BuildTargetEnv{..} entity targetDesc inputDescs =
+  EitherT $
+    syncCatchAndLogSpeculativeErrors btePrinter targetDesc
+    (Left . SpeculativeBuildFailure)
+    (Right <$> executionLogBuildInputs bte entity targetDesc inputDescs)
+
 tryApplyExecutionLog ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Db.ExecutionLog ->
   IO (Either ExecutionLogFailure (Db.ExecutionLog, BuiltTargets))
 tryApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc executionLog = {-# SCC "tryApplyExecutionLog" #-}
   runEitherT $ do
-    builtTargets <-
-      EitherT $
-      syncCatchAndLogSpeculativeErrors btePrinter targetDesc
-      (Left . SpeculativeBuildFailure)
-      (Right <$> executionLogBuildInputs bte entity targetDesc (Db.elInputsDescs executionLog))
+    builtTargets <- executionLogBuildInputsSpeculative bte entity targetDesc (Db.elInputsDescs executionLog)
     bimapEitherT MismatchedFiles id $
       executionLogVerifyFilesState bte targetDesc executionLog
     return (executionLog, builtTargets)
@@ -585,18 +590,19 @@ verifyFileDesc str filePath fileDesc existingVerify = do
     (Nothing, FileDescExisting {}) -> left (str <> " file was deleted")
 
 
-getFileDescInput :: MonadIO m => Db.Db -> FilePath -> m Db.FileDescInputNoReasons
-getFileDescInput db filePath = {-# SCC "getFileDescInput" #-} do
+getFileDescInput :: MonadIO m => Db.Db -> Reason -> FilePath -> m Db.FileDescInput
+getFileDescInput db reason filePath = {-# SCC "getFileDescInput" #-} do
   mStat <- liftIO $ Dir.getMFileStatus filePath
   case mStat of
-      Nothing -> return $ FileDescNonExisting ()
+      Nothing -> return $ FileDescNonExisting reason
       Just stat -> do
           contentDesc <- liftIO $ fileContentDescOfStat "wat" db filePath stat
+          let time = Posix.modificationTimeHiRes stat
           return
-              $ FileDescExisting $ Db.InputDescWith
-              { idModeAccess = Just ((), fileModeDescOfStat stat)
-              , idStatAccess = Just ((), fileStatDescOfStat stat)
-              , idContentAccess = Just ((), contentDesc)
+              $ FileDescExisting . (time,) $ Db.InputDescWith
+              { idModeAccess = Just (reason, fileModeDescOfStat stat)
+              , idStatAccess = Just (reason, fileStatDescOfStat stat)
+              , idContentAccess = Just (reason, contentDesc)
               }
 
 verifyInputDescs ::
@@ -704,17 +710,19 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = {-# SCC "tryLoadLatest
 
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput mLatestExecutionLog = {-# SCC "findApplyExecutionLog" #-} do
-  builtTargetsRef <- newIORef mempty
-  let buildInputs inputs =
-          makeImplicitInputs builtTargetsRef bte entity
-          (Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty))
-          -- AccessType is wrong here, nor we can we (rather
-          -- arbitrarily) use 'full' because it will fail on
-          -- directories that have patterns
-          (map (FSHook.Input FSHook.AccessTypeStat) inputs)
-          []
+  let speculativeReason = Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty)
+      buildInputs inputs = do
+          _ <- executionLogBuildInputsSpeculative bte entity targetDesc
+              -- AccessType is wrong here, nor we can we (rather
+              -- arbitrarily) use 'full' because it will fail on
+              -- directories that have patterns
+              $ map (fmap (Db.bimapFileDesc
+                           (const speculativeReason)
+                           (fmap . fmap $ const speculativeReason)))
+              $ inputs
+          return ()
 
-  mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (getFileDescInput db)
+  mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (getFileDescInput db speculativeReason)
   case mExecutionLog of
     Left Nothing -> handleCacheMiss
     Left (Just missingInput) -> do
