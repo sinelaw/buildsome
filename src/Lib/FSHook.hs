@@ -254,11 +254,11 @@ handleJobMsg _tidStr conn job (Protocol.Msg !isDelayed !func) = {-# SCC "handleJ
     Protocol.Trace severity msg    -> traceHandler handlers severity msg
   where
     handlers = jobFSAccessHandlers job
-    handleDelayed   inputs outputs = wrap $ delayedFSAccessHandler handlers actDesc inputs outputs
-    handleUndelayed inputs outputs = wrap $ undelayedFSAccessHandler handlers actDesc inputs outputs
+    handleDelayed   inputs outputs = {-# SCC "handleDelayed" #-} wrap $ delayedFSAccessHandler handlers actDesc inputs outputs
+    handleUndelayed inputs outputs = {-# SCC "handleUndelayed" #-} wrap $ undelayedFSAccessHandler handlers actDesc inputs outputs
     wrap = wrapHandler job conn isDelayed
     actDesc = AccessDocEmpty -- TODO: AccessDoc func $ jobLabel job
-    handleInput accessType path = handleInputs [Input accessType path]
+    handleInput accessType path = {-# SCC "handleInput" #-} handleInputs [Input accessType path]
     handleInputs inputs =
       case isDelayed of
       NotDelayed -> handleUndelayed inputs []
@@ -267,7 +267,7 @@ handleJobMsg _tidStr conn job (Protocol.Msg !isDelayed !func) = {-# SCC "handleJ
       Input AccessTypeModeOnly path
     mkDelayedOutput ( behavior, Protocol.OutFilePath path _effect) =
       DelayedOutput behavior path
-    handleOutputs = handle []
+    handleOutputs = {-# SCC "handleOutputs" #-} handle []
     handle inputs outputPairs =
       case isDelayed of
       NotDelayed -> handleUndelayed allInputs $ map snd outputPairs
@@ -276,16 +276,16 @@ handleJobMsg _tidStr conn job (Protocol.Msg !isDelayed !func) = {-# SCC "handleJ
         allInputs = inputs ++ map inputOfOutputPair outputPairs
 
 wrapHandler :: RunningJob -> Socket -> IsDelayed -> IO () -> IO ()
-wrapHandler job conn isDelayed handler =
+wrapHandler job conn isDelayed !handler = {-# SCC "wrapHandler" #-}
   forwardExceptions $ do
-    handler
+    ( {-# SCC "wrapHandler.handler" #-} handler)
     -- Intentionally avoid sendGo if jobFSAccessHandler failed. It
     -- means we disallow the effect.
     case isDelayed of
       Delayed -> sendGo conn
       NotDelayed -> return ()
   where
-    forwardExceptions =
+    forwardExceptions = {-# SCC "forwardExceptions" #-}
       handleSync $ \e@E.SomeException {} ->
       E.throwTo (jobThreadId job) e
 
