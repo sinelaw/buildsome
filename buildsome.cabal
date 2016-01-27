@@ -48,6 +48,7 @@ library
   exposed-modules:   Buildsome
                ,     Buildsome.BuildId
                ,     Buildsome.BuildMaps
+               ,     Buildsome.Chart
                ,     Buildsome.ClangCommands
                ,     Buildsome.Clean
                ,     Buildsome.Color
@@ -161,7 +162,6 @@ library
 
   if flag(Charts)
     cpp-options:       -DWITH_CHARTS_SUPPORT
-    other-modules:     Buildsome.Chart
     build-depends:     Chart == 1.2.*
                  ,     Chart-cairo == 1.2.*
                  ,     data-default-class == 0.0.*
