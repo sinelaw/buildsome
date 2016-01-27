@@ -366,7 +366,7 @@ executionLogPathCmp (ELBranchPath x) (ELBranchPath y) =
     all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ zip x y
 
 pathChunkSize :: Int
-pathChunkSize = 50
+pathChunkSize = 500
 
 getPathStrings :: Db -> ELBranchPath StringKey -> IO (ELBranchPath FilePath)
 getPathStrings db = traverse (getString db)
