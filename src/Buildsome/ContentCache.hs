@@ -10,10 +10,12 @@ import           Buildsome.Types (Buildsome(..), BuildTargetEnv(..))
 import           Control.Monad (unless, when, forM_)
 import           Control.Monad.IO.Class (MonadIO(..))
 import           Control.Monad.Trans.Either (EitherT(..), left)
+import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Base16 as Base16
 import           Data.List (sortOn)
 import           Data.Maybe (fromMaybe)
-
+import qualified Codec.Compression.Zlib as ZLib
 import           Data.Monoid
 import           Data.String (IsString(..))
 import           Lib.Directory (getMFileStatus)
@@ -86,6 +88,12 @@ cleanContentCacheDir' buildsome = do
 mkTargetWithHashPath :: Buildsome -> Hash -> FilePath
 mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> Base16.encode (Hash.asByteString contentHash)-- (outPath <> "." <> Base16.encode contentHash)
 
+compress :: FilePath -> FilePath -> IO ()
+compress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.compress)
+
+decompress :: FilePath -> FilePath -> IO ()
+decompress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.decompress)
+
 addFileToCache :: Buildsome -> FilePath -> Posix.FileStatus -> Hash -> IO ()
 addFileToCache buildsome outPath stat contentHash = do
   let targetPath = mkTargetWithHashPath buildsome contentHash
@@ -93,7 +101,7 @@ addFileToCache buildsome outPath stat contentHash = do
   alreadyExists <- FilePath.exists targetPath
   unless alreadyExists $ do
     Dir.createDirectories $ FilePath.takeDirectory targetPath
-    Dir.copyFile outPath targetPath
+    compress outPath targetPath
     savedSize <- fromMaybe 0 <$> Db.readIRef (Db.cachedOutputsUsage $ bsDb buildsome)
     Db.writeIRef (Db.cachedOutputsUsage (bsDb buildsome))
         $ savedSize + (fromIntegral $ Posix.fileSize stat)
@@ -116,7 +124,7 @@ refreshFromContentCache
     -- Set stat attributes before creating the file, so the target file is created with correct
     -- attrs from the start
     -- TODO use proper tempfile naming
-    Dir.copyFile cachedPath  tempFile
+    decompress cachedPath tempFile
     -- TODO set other stat fields?
     -- TODO these may cause failure later (over permissions) if the user running now is not the one
     -- recorded in the log!
