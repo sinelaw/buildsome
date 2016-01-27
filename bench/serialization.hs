@@ -36,7 +36,7 @@ getFileDescInput reason filePath = {-# SCC "getFileDescInput" #-} do
           contentDesc <- liftIO $ fileContentDescOfStat filePath stat
           let time = Posix.modificationTimeHiRes stat
           return
-              $ Db.InputDescOfExisting . (time,) $ Db.ExistingInputDescOf
+              $ Db.InputDescOfExisting time $ Db.ExistingInputDescOf
               { Db.idModeAccess = Just (reason, fileModeDescOfStat stat)
               , Db.idStatAccess = Just (reason, fileStatDescOfStat stat)
               , Db.idContentAccess = Just (reason, contentDesc)
@@ -63,7 +63,7 @@ main = do
             Db.ExecutionLogOf
             { Db.elBuildId = BuildId "dummy"
             , Db.elCommand = dummyKey
-            , Db.elInputBranchPath = Db.ELBranchPath $ take 1000 $ repeat (dummyKey, fmap (const dummyKey) testValue)
+            , Db.elInputBranchPath = Db.ELBranchPath $ map (uncurry Db.ELBranchInput) . take 1000 $ repeat (dummyKey, fmap (const dummyKey) testValue)
             , Db.elOutputsDescs = [(dummyKey, FileDescNonExisting ())]
             , Db.elStdoutputs = StdOutputs dummyKey dummyKey
             , Db.elSelfTime = 0

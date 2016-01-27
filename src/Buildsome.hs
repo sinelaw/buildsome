@@ -598,7 +598,7 @@ getFileDescInput db reason filePath = {-# SCC "getFileDescInput" #-} do
           contentDesc <- liftIO $ fileContentDescOfStat "wat" db filePath stat
           let time = Posix.modificationTimeHiRes stat
           return
-              $ Db.InputDescOfExisting . (time,) $ Db.ExistingInputDescOf
+              $ Db.InputDescOfExisting time $ Db.ExistingInputDescOf
               { idModeAccess = Just (reason, fileModeDescOfStat stat)
               , idStatAccess = Just (reason, fileStatDescOfStat stat)
               , idContentAccess = Just (reason, contentDesc)
@@ -710,7 +710,7 @@ tryLoadLatestExecutionLog bte@BuildTargetEnv{..} target = {-# SCC "tryLoadLatest
 findApplyExecutionLog' :: BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Maybe (FilePath) -> Maybe Db.ExecutionLog -> IO (Maybe (Db.ExecutionLog, BuiltTargets))
 findApplyExecutionLog' bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} retryingBecauseOfInput mLatestExecutionLog = {-# SCC "findApplyExecutionLog" #-} do
   let speculativeReason = Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty)
-      buildInputs (Db.ELBranchPath inputs) = do
+      buildInputs inputs = do
           _ <- executionLogBuildInputsSpeculative bte entity targetDesc
               -- AccessType is wrong here, nor we can we (rather
               -- arbitrarily) use 'full' because it will fail on
@@ -1078,7 +1078,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = {-# SCC "
   return Db.ExecutionLogOf
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
-    , elInputBranchPath = Db.ELBranchPath $ M.toList $ fmap Db.fromFileDesc inputsDescs
+    , elInputBranchPath = Db.ELBranchPath . map (uncurry Db.ELBranchInput) . M.toList $ fmap Db.fromFileDesc inputsDescs
     , elOutputsDescs = outputDescPairs
     , elStdoutputs = stdOutputs
     , elSelfTime = selfTime
