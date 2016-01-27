@@ -1335,7 +1335,6 @@ with printer db makefilePath makefile opt@Opt{..} body = do
     let buildMaps = BuildMaps.make makefile
     let phoniesSet = S.fromList . map snd $ makefilePhonies makefile
     deleteRemovedOutputs printer db phoniesSet buildMaps
-
     runOnce <- once
     errorRef <- newIORef Nothing
     statsCache <- newIORef M.empty
@@ -1367,7 +1366,8 @@ with printer db makefilePath makefile opt@Opt{..} body = do
         }
     withInstalledSigintHandler
       (killOnce "\nBuild interrupted by Ctrl-C, shutting down."
-       (E.SomeException E.UserInterrupt)) $
+       (E.SomeException E.UserInterrupt)) $ do
+      ContentCache.cleanContentCacheDir buildsome
       body buildsome
         -- We must not leak running slaves as we're not allowed to
         -- access fsHook, db, etc after leaving here:
