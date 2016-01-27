@@ -33,9 +33,8 @@ flag DebugPrint
   description: Print internal debugging information
   default: False
 
-executable buildsome
+library
   hs-source-dirs:    src/
-  main-is:           Main.hs
 
   if flag(DebugPrint)
      cpp-options: -DDEBUG_PRINT
@@ -46,7 +45,7 @@ executable buildsome
     ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
     ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
   }
-  other-modules:     Buildsome
+  exposed-modules:   Buildsome
                ,     Buildsome.BuildId
                ,     Buildsome.BuildMaps
                ,     Buildsome.ClangCommands
@@ -169,3 +168,15 @@ executable buildsome
 
   build-tools:         happy, alex
   default-language:    Haskell2010
+
+executable buildsome
+  main-is:           src/Main.hs
+  ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
+  ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
+  build-depends:     base >=4.6 && <4.9
+               ,     buildsome
+               ,     base-compat
+               ,     bytestring >=0.10 && <0.11
+               ,     containers >=0.5 && <0.6
+               ,     unix >=2.7 && <2.8
+  default-language:  Haskell2010
