@@ -42,8 +42,8 @@ library
   if flag(debug) {
     ghc-options:       -threaded -Wall -O0
   } else {
-    ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
-    ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
+    ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g -funbox-strict-fields
+    ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g -funbox-strict-fields
   }
   exposed-modules:   Buildsome
                ,     Buildsome.BuildId
@@ -171,8 +171,8 @@ library
 
 executable buildsome
   main-is:           src/Main.hs
-  ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
-  ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g
+  ghc-options:       -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g -funbox-strict-fields
+  ghc-prof-options:  -threaded -Wall -O2 -fsimpl-tick-factor=1000 -rtsopts -with-rtsopts=-A16M -fwarn-incomplete-uni-patterns -g -funbox-strict-fields
   build-depends:     base >=4.6 && <4.9
                ,     buildsome
                ,     base-compat
