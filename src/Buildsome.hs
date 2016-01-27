@@ -924,7 +924,7 @@ recordOutputs ::
   Buildsome ->
   IORef (Map FilePath Reason) -> Reason ->
   Set FilePath -> Set FilePath -> IO ()
-recordOutputs buildsome outputsRef accessDoc targetOutputsSet paths = do
+recordOutputs buildsome outputsRef accessDoc targetOutputsSet paths = {-# SCC "recordOutputs" #-} do
   atomicModifyIORef'_ outputsRef $ mappend $ M.fromSet (const accessDoc) paths
   registerOutputs buildsome $ paths `S.intersection` targetOutputsSet
 
@@ -981,7 +981,7 @@ fsAccessHandlers outputsRef inputsRef builtTargetsRef bte@BuildTargetEnv{..} ent
 
     commonAccessHandler accessDoc rawInputs rawOutputs
       getOutPath getOutEffect handler
-      = do
+      = {-# SCC "commonAccessHandler" #-} do
         recordedOutputs <- readIORef outputsRef
         let ignoredOutput = MagicFiles.outputIgnored . getOutPath
             ignoredInput = inputIgnored recordedOutputs
