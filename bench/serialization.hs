@@ -54,16 +54,18 @@ main = do
     -- measure 1000 "getMFileStatus /tmp" (fmap Posix.fileSize <$> Dir.getMFileStatus "/tmp")
     -- measure 100 "getFileDescInput /tmp" (getFileDescInput (Db.BecauseHintFrom []) "/tmp")
     -- measure 100 "getFileDescInput /bin/bash" (getFileDescInput (Db.BecauseHintFrom []) "/bin/bash")
-    !testValue <- getFileDescInput (Db.BecauseHintFrom []) "/tmp"
     -- measure 10000 "encode" (return $! encode testValue)
     -- measure 10000 "decode" (return $! decode encoded :: IO Db.InputDesc)
+    let dummyKey = Db.StringKeyShort "dummy"
+
+    testValue <- fmap (const dummyKey) <$> getFileDescInput (Db.BecauseHintFrom []) "/tmp"
+
     let !encoded = encode testValue
-        dummyKey = Db.StringKeyShort "dummy"
         !executionLog =
             Db.ExecutionLogOf
             { Db.elBuildId = BuildId "dummy"
             , Db.elCommand = dummyKey
-            , Db.elInputBranchPath = Db.ELBranchPath $ map (uncurry Db.ELBranchInput) . take 1000 $ repeat (dummyKey, fmap (const dummyKey) testValue)
+            , Db.elInputBranchPath = Db.ELBranchPath $ map (uncurry Db.ELBranchInput) . take 1000 $ repeat (dummyKey, testValue)
             , Db.elOutputsDescs = [(dummyKey, FileDescNonExisting ())]
             , Db.elStdoutputs = StdOutputs dummyKey dummyKey
             , Db.elSelfTime = 0
@@ -76,7 +78,7 @@ main = do
         defaultMain
             [ bgroup "InputDesc"
               [ bench "encode" $ nf encode testValue
-              , bench "decode" $ nf (decode :: ByteString -> Db.InputDesc) encoded ]
+              , bench "decode" $ nf (decode :: ByteString -> Db.InputDescOf Db.StringKey) encoded ]
 
             , bgroup "ExecutionLogForDb"
               [ bench "encode" $ nf encode executionLog
