@@ -393,13 +393,10 @@ executionLogLookup' iref db prepareInputs getCurFileDesc = {-# SCC "executionLog
             case buildInputsRes of
                 Right _ -> return ()
                 Left _ -> left Nothing
-            mTarget <-
-                runEitherT $ firstRight
-                $ flip map resolvedPaths $ \(path, t) ->
-                    (executionLogPathCheck db getCurFileDesc path >> pure t)
-            case mTarget of
-                Right target -> executionLogLookup' (executionLogNode target db) db prepareInputs getCurFileDesc
-                Left mFilePath -> left mFilePath
+            firstRight
+                $ flip map resolvedPaths $ \(path, target) ->
+                    (executionLogPathCheck db getCurFileDesc path
+                     >> executionLogLookup' (executionLogNode target db) db prepareInputs getCurFileDesc)
 
 executionLogNodeKey :: ExecutionLogNodeKey -> ELBranchPath StringKey -> ExecutionLogNodeKey
 executionLogNodeKey (ExecutionLogNodeKey oldKey) (ELBranchPath is) =
