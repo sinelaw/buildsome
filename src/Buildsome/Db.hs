@@ -16,12 +16,12 @@ module Buildsome.Db
   , ExistingInputDesc, inputDescDropReasons, toFileDesc, fromFileDesc
   , OutputDesc(..)
   , ExecutionLog, ExecutionLogOf(..), elInputsDescs, ELBranchPath(..)
-  , ExecutionLogNode(..)
+  , ExecutionLogNode(..), ExecutionLogNodeKey(..)
   , executionLogNode, getExecutionLog
   , executionLogUpdate
   , executionLogLookup
   , latestExecutionLog
-  , FileDescInput, InputDescOf(..), InputDesc
+  , FileDescInput, InputDescOf(..), InputDesc, StringKey(..)
   , FileContentDescCache(..), fileContentDescCache, bimapFileDesc
   , Reason, ReasonOf(..)
   , IRef(..)
