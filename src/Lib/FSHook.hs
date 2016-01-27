@@ -1,4 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, DeriveGeneric #-}
 module Lib.FSHook
   ( getLdPreloadPath
@@ -204,7 +205,7 @@ sendGo conn = void $ SockBS.send conn (BS8.pack "GO")
 
 {-# INLINE handleJobMsg #-}
 handleJobMsg :: String -> Socket -> RunningJob -> Protocol.Msg -> IO ()
-handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) = {-# SCC "handleJobMsg" #-}
+handleJobMsg _tidStr conn job (Protocol.Msg !isDelayed !func) = {-# SCC "handleJobMsg" #-}
   case func of
     -- TODO: If any of these outputs are NOT also mode-only inputs on
     -- their file paths, don't use handleOutputs so that we don't
