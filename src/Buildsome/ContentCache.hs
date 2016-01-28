@@ -57,13 +57,16 @@ filesToDelete maxSize fs = foldr go (0, []) fs
                     then (fileName, fileSize):outFiles
                     else outFiles
 
+toKb :: Integral a => a -> a
+toKb x = x `div` 1024
+
 cleanContentCacheDir :: Buildsome -> IO ()
 cleanContentCacheDir buildsome = do
   Dir.createDirectories $ contentCacheDir buildsome
   putStr "Checking cache dir size..."
   savedSize <- Db.readIRef $ Db.cachedOutputsUsage (bsDb buildsome)
   case savedSize of
-      Just x | x < const_MAX_CACHE_SIZE -> putStrLn "OK."
+      Just x | x < const_MAX_CACHE_SIZE -> putStrLn $ "OK, " <> show (toKb $ const_MAX_CACHE_SIZE - x) <> "kb left before cleanup."
       _ -> cleanContentCacheDir' buildsome
 
 cleanContentCacheDir' :: Buildsome -> IO ()
@@ -78,9 +81,9 @@ cleanContentCacheDir' buildsome = do
       then putStrLn $ concat
            [ "Cache dir ", show (contentCacheDir buildsome)
            , " contains ", show (length files)
-           , " files, totaling ", show totalSize
-           , " bytes. Going to remove ", show numRemoved, " oldest cache files"
-           , ", saving ", show bytesSaved, " bytes." ]
+           , " files, totaling ", show (toKb totalSize)
+           , "kb. Going to remove ", show numRemoved, " oldest cache files"
+           , ", saving ", show (toKb $ bytesSaved), "kb." ]
       else putStr "Updating from disk..." >> putStrLn "OK."
   forM_ filesToRemove (Posix.removeLink . fst)
   Db.writeIRef (Db.cachedOutputsUsage (bsDb buildsome)) $ totalSize - bytesSaved
@@ -95,7 +98,7 @@ decompress :: FilePath -> FilePath -> IO ()
 decompress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.decompress)
 
 addFileToCache :: Buildsome -> FilePath -> Posix.FileStatus -> Hash -> IO ()
-addFileToCache buildsome outPath stat contentHash = do
+addFileToCache buildsome outPath _stat contentHash = do
   let targetPath = mkTargetWithHashPath buildsome contentHash
   -- putStrLn $ BS8.unpack ("Caching: " <> outPath <> " -> " <> targetPath)
   alreadyExists <- FilePath.exists targetPath
@@ -114,7 +117,7 @@ refreshFromContentCache
     unless oldExists $ left "No cached copy"
   liftIO $ do
     printStrLn btePrinter $ bsRender bteBuildsome
-      $ mconcat [ "Copying: " <> cPath (show cachedPath) <> " -> " <> cPath (show filePath) ]
+      $ mconcat [ "Restoring: " <> cPath (show cachedPath) <> " -> " <> cPath (show filePath) ]
     removeIfExists filePath
     removeIfExists tempFile
     -- Update the cached file's mtime so as to make cache cleanup by last usage possible
