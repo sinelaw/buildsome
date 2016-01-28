@@ -15,7 +15,6 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Base16 as Base16
 import           Data.List (sortOn)
 import           Data.Maybe (fromMaybe)
-import qualified Codec.Compression.Zlib as ZLib
 import           Data.Monoid
 import           Data.String (IsString(..))
 import           Lib.Directory (getMFileStatus)
@@ -92,11 +91,11 @@ mkTargetWithHashPath :: Buildsome -> Hash -> FilePath
 mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> prefix </> name
   where (prefix, name) = BS8.splitAt 2 $ Base16.encode (Hash.asByteString contentHash)
 
-compress :: FilePath -> FilePath -> IO ()
-compress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.compress)
+placeInCache :: FilePath -> FilePath -> IO ()
+placeInCache inFile outFile = Posix.createLink inFile outFile
 
-decompress :: FilePath -> FilePath -> IO ()
-decompress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.decompress)
+getFromCache :: FilePath -> FilePath -> IO ()
+getFromCache inFile outFile = Posix.createLink inFile outFile
 
 addFileToCache :: Buildsome -> FilePath -> Posix.FileStatus -> Hash -> IO ()
 addFileToCache buildsome outPath _stat contentHash = do
@@ -105,11 +104,11 @@ addFileToCache buildsome outPath _stat contentHash = do
   alreadyExists <- FilePath.exists targetPath
   unless alreadyExists $ do
     Dir.createDirectories $ FilePath.takeDirectory targetPath
-    compress outPath targetPath
-    compressedStat <- Posix.getFileStatus targetPath
+    placeInCache outPath targetPath
+    cachedFileStat <- Posix.getFileStatus targetPath
     savedSize <- fromMaybe 0 <$> Db.readIRef (Db.cachedOutputsUsage $ bsDb buildsome)
     Db.writeIRef (Db.cachedOutputsUsage (bsDb buildsome))
-        $ savedSize + (fromIntegral $ Posix.fileSize compressedStat)
+        $ savedSize + (fromIntegral $ Posix.fileSize cachedFileStat)
 
 refreshFromContentCache :: (IsString e, MonadIO m) =>
   BuildTargetEnv -> FilePath -> Maybe FileContentDesc -> Maybe FileStatDesc -> EitherT e m ()
@@ -129,7 +128,7 @@ refreshFromContentCache
     -- Set stat attributes before creating the file, so the target file is created with correct
     -- attrs from the start
     -- TODO use proper tempfile naming
-    decompress cachedPath tempFile
+    getFromCache cachedPath tempFile
     -- TODO set other stat fields?
     -- TODO these may cause failure later (over permissions) if the user running now is not the one
     -- recorded in the log!
