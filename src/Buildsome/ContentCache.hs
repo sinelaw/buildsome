@@ -105,9 +105,10 @@ addFileToCache buildsome outPath _stat contentHash = do
   unless alreadyExists $ do
     Dir.createDirectories $ FilePath.takeDirectory targetPath
     compress outPath targetPath
+    compressedStat <- Posix.getFileStatus targetPath
     savedSize <- fromMaybe 0 <$> Db.readIRef (Db.cachedOutputsUsage $ bsDb buildsome)
     Db.writeIRef (Db.cachedOutputsUsage (bsDb buildsome))
-        $ savedSize + (fromIntegral $ Posix.fileSize stat)
+        $ savedSize + (fromIntegral $ Posix.fileSize compressedStat)
 
 refreshFromContentCache :: (IsString e, MonadIO m) =>
   BuildTargetEnv -> FilePath -> Maybe FileContentDesc -> Maybe FileStatDesc -> EitherT e m ()
