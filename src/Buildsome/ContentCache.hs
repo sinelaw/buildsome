@@ -72,7 +72,7 @@ cleanContentCacheDir buildsome = do
 cleanContentCacheDir' :: Buildsome -> IO ()
 cleanContentCacheDir' buildsome = do
   files <- Dir.getDirectoryContents (contentCacheDir buildsome)
-      >>= mapM (return . ((contentCacheDir buildsome <> "/") <>))
+      >>= mapM (return . (contentCacheDir buildsome </>))
       >>= mapM (\fileName -> (fileName,) <$> getMFileStatus fileName)
   let (totalSize, filesToRemove) = filesToDelete const_MAX_CACHE_SIZE $ sortOn (fmap Posix.modificationTimeHiRes . snd) files
       numRemoved = length $ filesToRemove
@@ -89,7 +89,8 @@ cleanContentCacheDir' buildsome = do
   Db.writeIRef (Db.cachedOutputsUsage (bsDb buildsome)) $ totalSize - bytesSaved
 
 mkTargetWithHashPath :: Buildsome -> Hash -> FilePath
-mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> Base16.encode (Hash.asByteString contentHash)-- (outPath <> "." <> Base16.encode contentHash)
+mkTargetWithHashPath buildsome contentHash = contentCacheDir buildsome </> prefix </> name
+  where (prefix, name) = BS8.splitAt 2 $ Base16.encode (Hash.asByteString contentHash)
 
 compress :: FilePath -> FilePath -> IO ()
 compress inFile outFile = BS.readFile (BS8.unpack inFile) >>= (BS.writeFile (BS8.unpack outFile) . ZLib.compress)
