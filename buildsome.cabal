@@ -158,7 +158,6 @@ library
                    , time >=1.4 && <1.6
                    , transformers >=0.3 && <=0.5
                    , unix >=2.7 && <2.8
-                   , zlib >=0.5 && <1.0
                    , happy
 
   if flag(Charts)
