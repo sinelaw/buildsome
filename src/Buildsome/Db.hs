@@ -42,6 +42,7 @@ import           Control.Monad              (join, liftM)
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), left, runEitherT, bimapEitherT)
 import           Data.Binary                (Binary (..))
+import qualified Data.Binary                as Binary
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS8
 import           Data.Default               (def)
@@ -128,7 +129,17 @@ data ExistingInputDescOf a = ExistingInputDescOf
   , idContentAccess :: Maybe (a, FileContentDesc)
   } deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance NFData a => NFData (ExistingInputDescOf a) where rnf = genericRnf
-instance Binary (ExistingInputDescOf (ReasonOf StringKey))
+
+{-# INLINE getExistingInputDescOf #-}
+getExistingInputDescOf :: Binary.Get (ExistingInputDescOf (ReasonOf StringKey))
+getExistingInputDescOf = ExistingInputDescOf <$> get <*> get <*> get
+
+{-# INLINE putExistingInputDescOf #-}
+putExistingInputDescOf :: (ExistingInputDescOf (ReasonOf StringKey)) -> Binary.Put
+putExistingInputDescOf ExistingInputDescOf{..} = do
+    put idModeAccess
+    put idStatAccess
+    put idContentAccess
 
 type ExistingInputDesc = ExistingInputDescOf (ReasonOf FilePath)
 
@@ -146,11 +157,23 @@ instance NFData OutputDesc where rnf = genericRnf
 -- can't for a simple newtype of FileDesc)
 -- TODO: naming...
 data InputDescOf a
-    = InputDescOfNonExisting (ReasonOf a)
-    | InputDescOfExisting (ExistingInputDescOf (ReasonOf a))
+    = InputDescOfNonExisting !(ReasonOf a)
+    | InputDescOfExisting !(ExistingInputDescOf (ReasonOf a))
     deriving (Show, Generic, Functor, Foldable, Traversable)
 instance NFData a => NFData (InputDescOf a) where rnf = genericRnf
-instance Binary (InputDescOf StringKey)
+
+{-# INLINE getInputDescOfStringKey #-}
+getInputDescOfStringKey :: Binary.Get (InputDescOf StringKey)
+getInputDescOfStringKey = do
+    exists <- get
+    if exists
+        then InputDescOfExisting <$> getExistingInputDescOf
+        else InputDescOfNonExisting <$> get
+
+instance Binary (InputDescOf StringKey) where
+    get = getInputDescOfStringKey
+    put (InputDescOfExisting r) = put True >> putExistingInputDescOf r
+    put (InputDescOfNonExisting r) = put False >> put r
 
 mapInputDescOfReason :: (ReasonOf a -> ReasonOf b) -> InputDescOf a -> InputDescOf b
 mapInputDescOfReason f (InputDescOfNonExisting r) = InputDescOfNonExisting (f r)
