@@ -142,7 +142,6 @@ refreshFromContentCache
     Posix.setFileMode tempFile (fileMode $ basicStatEssence fullStat)
     Posix.setOwnerAndGroup tempFile (fileOwner $ basicStatEssence fullStat) (fileGroup $ basicStatEssence fullStat)
     Dir.renameFile tempFile filePath
-    Posix.setFileTimesHiRes filePath (statusChangeTimeHiRes fullStat) (modificationTimeHiRes fullStat)
 
   where Color.Scheme{..} = Color.scheme
         cachedPath = mkTargetWithHashPath bteBuildsome contentHash

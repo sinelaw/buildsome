@@ -98,9 +98,6 @@ data FullStatEssence = FullStatEssence
   { basicStatEssence      :: !BasicStatEssence
   , fileSize              :: !Posix.FileOffset
   , fileType              :: !FileType
-  -- Tracking access time is meaningless
-  , modificationTimeHiRes :: !POSIXTime
-  , statusChangeTimeHiRes :: !POSIXTime
   } deriving (Generic, Eq, Show, Ord)
 instance Binary FullStatEssence
 instance NFData FullStatEssence where rnf = const () -- TODO wat
@@ -154,8 +151,6 @@ fullStatEssenceOfStat stat = FullStatEssence
   { basicStatEssence = basicStatEssenceOfStat stat
   , fileType = fileTypeOfStat stat
   , fileSize = Posix.fileSize stat
-  , modificationTimeHiRes = Posix.modificationTimeHiRes stat
-  , statusChangeTimeHiRes = Posix.statusChangeTimeHiRes stat
   }
 
 fileStatDescOfStat :: Posix.FileStatus -> FileStatDesc

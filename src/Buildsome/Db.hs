@@ -42,6 +42,7 @@ import           Control.Monad              (join, liftM)
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), left, runEitherT, bimapEitherT)
 import           Data.Binary                (Binary (..))
+import qualified Data.Binary                as Binary
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS8
 import           Data.Default               (def)
@@ -128,7 +129,17 @@ data ExistingInputDescOf a = ExistingInputDescOf
   , idContentAccess :: Maybe (a, FileContentDesc)
   } deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance NFData a => NFData (ExistingInputDescOf a) where rnf = genericRnf
-instance Binary (ExistingInputDescOf (ReasonOf StringKey))
+
+{-# INLINE getExistingInputDescOf #-}
+getExistingInputDescOf :: Binary.Get (ExistingInputDescOf (ReasonOf StringKey))
+getExistingInputDescOf = ExistingInputDescOf <$> get <*> get <*> get
+
+{-# INLINE putExistingInputDescOf #-}
+putExistingInputDescOf :: (ExistingInputDescOf (ReasonOf StringKey)) -> Binary.Put
+putExistingInputDescOf ExistingInputDescOf{..} = do
+    put idModeAccess
+    put idStatAccess
+    put idContentAccess
 
 type ExistingInputDesc = ExistingInputDescOf (ReasonOf FilePath)
 
@@ -146,11 +157,23 @@ instance NFData OutputDesc where rnf = genericRnf
 -- can't for a simple newtype of FileDesc)
 -- TODO: naming...
 data InputDescOf a
-    = InputDescOfNonExisting (ReasonOf a)
-    | InputDescOfExisting (ExistingInputDescOf (ReasonOf a))
+    = InputDescOfNonExisting !(ReasonOf a)
+    | InputDescOfExisting !(ExistingInputDescOf (ReasonOf a))
     deriving (Show, Generic, Functor, Foldable, Traversable)
 instance NFData a => NFData (InputDescOf a) where rnf = genericRnf
-instance Binary (InputDescOf StringKey)
+
+{-# INLINE getInputDescOfStringKey #-}
+getInputDescOfStringKey :: Binary.Get (InputDescOf StringKey)
+getInputDescOfStringKey = do
+    exists <- get
+    if exists
+        then InputDescOfExisting <$> getExistingInputDescOf
+        else InputDescOfNonExisting <$> get
+
+instance Binary (InputDescOf StringKey) where
+    get = getInputDescOfStringKey
+    put (InputDescOfExisting r) = put True >> putExistingInputDescOf r
+    put (InputDescOfNonExisting r) = put False >> put r
 
 mapInputDescOfReason :: (ReasonOf a -> ReasonOf b) -> InputDescOf a -> InputDescOf b
 mapInputDescOfReason f (InputDescOfNonExisting r) = InputDescOfNonExisting (f r)
@@ -286,14 +309,13 @@ mkIRefKey key db = IRef
   , delIRef = deleteKey db key
   }
 
-data StringKey = StringKey Hash | StringKeyShort ByteString
+newtype StringKey = StringKey ByteString
   deriving (Generic, Show, Eq, Ord)
 instance Binary StringKey
 instance NFData StringKey where rnf = genericRnf
 
 fromStringKey :: StringKey -> Hash
-fromStringKey (StringKey h) = h
-fromStringKey (StringKeyShort s) = Hash.Hash s
+fromStringKey (StringKey s) = Hash.Hash s
 
 string :: Hash -> Db -> IRef ByteString
 string k = mkIRefKey $ "s:" <> Hash.asByteString k
@@ -324,21 +346,26 @@ getItem k act ioref iref = do
 putItem :: Ord k => k -> v -> IORef (Map k v) -> IRef v -> IO ()
 putItem k v ioref iref = updateItem ioref k v $ writeIRef iref v
 
+stringKeyMinLength :: Int
+stringKeyMinLength = 16
+
 getString :: Db -> StringKey -> IO ByteString
-getString _  (StringKeyShort s) = return s
-getString db (StringKey k)      = {-# SCC "getString" #-}
-    getItem k missingError (dbStrings db) (string k db)
+getString db (StringKey s)      = {-# SCC "getString" #-}
+    if BS8.length s <= stringKeyMinLength
+    then return s
+    else getItem k missingError (dbStrings db) (string k db)
     where
+        k = Hash.Hash s
         missingError = error $ "Corrupt DB? Missing string for key: " <> show k
 
 putString :: Db -> ByteString -> IO StringKey
 putString db s = {-# SCC "putString" #-}
   if BS8.length s <= 16
-  then return $ StringKeyShort s
+  then return $ StringKey s
   else do
       let k = Hash.md5 s
       putItem k s (dbStrings db) (string k db)
-      return $ StringKey k
+      return $ StringKey $ Hash.asByteString k
 
 getContentCache :: Db -> FilePath -> IO FileContentDescCache -> IO FileContentDescCache
 getContentCache db filePath act =
