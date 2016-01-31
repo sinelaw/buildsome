@@ -48,9 +48,9 @@ import qualified System.Posix.ByteString as Posix
 type ContentHash = Hash
 
 data FileContentDesc
-  = FileContentDescRegular ContentHash
-  | FileContentDescSymlink FilePath
-  | FileContentDescDir ContentHash -- Of the getDirectoryContents
+  = FileContentDescRegular !ContentHash
+  | FileContentDescSymlink !FilePath
+  | FileContentDescDir !ContentHash -- Of the getDirectoryContents
   deriving (Generic, Eq, Show, Ord)
 instance Binary FileContentDesc
 instance NFData FileContentDesc where rnf = genericRnf
@@ -115,8 +115,8 @@ instance Cmp FullStatEssence where
       cShow = cmpGetterBy Cmp.eqShow
 
 data FileStatDesc
-  = FileStatDirectory BasicStatEssence
-  | FileStatOther FullStatEssence
+  = FileStatDirectory !BasicStatEssence
+  | FileStatOther !FullStatEssence
   deriving (Generic, Eq, Show, Ord)
   -- Weird deriving order!
 instance Binary FileStatDesc

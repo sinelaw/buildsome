@@ -123,9 +123,9 @@ instance Binary (ReasonOf StringKey)
 type Reason = ReasonOf FilePath
 
 data ExistingInputDescOf a = ExistingInputDescOf
-  { idModeAccess    :: Maybe (a, FileModeDesc)
-  , idStatAccess    :: Maybe (a, FileStatDesc)
-  , idContentAccess :: Maybe (a, FileContentDesc)
+  { idModeAccess    :: !(Maybe (a, FileModeDesc))
+  , idStatAccess    :: !(Maybe (a, FileStatDesc))
+  , idContentAccess :: !(Maybe (a, FileContentDesc))
   } deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance NFData a => NFData (ExistingInputDescOf a) where rnf = genericRnf
 instance Binary (ExistingInputDescOf (ReasonOf StringKey))
@@ -146,8 +146,8 @@ instance NFData OutputDesc where rnf = genericRnf
 -- can't for a simple newtype of FileDesc)
 -- TODO: naming...
 data InputDescOf a
-    = InputDescOfNonExisting (ReasonOf a)
-    | InputDescOfExisting (ExistingInputDescOf (ReasonOf a))
+    = InputDescOfNonExisting !(ReasonOf a)
+    | InputDescOfExisting !(ExistingInputDescOf (ReasonOf a))
     deriving (Show, Generic, Functor, Foldable, Traversable)
 instance NFData a => NFData (InputDescOf a) where rnf = genericRnf
 instance Binary (InputDescOf StringKey)
