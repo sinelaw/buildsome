@@ -46,6 +46,8 @@ import           Data.String (IsString(..))
 import           Data.Time (DiffTime)
 import           Data.Time.Clock.POSIX (POSIXTime)
 import           Data.Typeable (Typeable)
+import           Data.Vector                (Vector)
+import qualified Data.Vector                as Vector
 import qualified Lib.Cmp as Cmp
 import           Lib.Cmp (Cmp)
 import           Lib.ColorText (ColorText)
@@ -513,13 +515,13 @@ data ExecutionLogFailure
   | SpeculativeBuildFailure E.SomeException
 
 executionLogBuildInputsSpeculative ::
-  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> [(FilePath, Db.FileDescInput)] ->
+  BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Vector (FilePath, Db.FileDescInput) ->
   EitherT ExecutionLogFailure IO BuiltTargets
 executionLogBuildInputsSpeculative bte@BuildTargetEnv{..} entity targetDesc inputDescs =
   EitherT $
     syncCatchAndLogSpeculativeErrors btePrinter targetDesc
     (Left . SpeculativeBuildFailure)
-    (Right <$> executionLogBuildInputs bte entity targetDesc inputDescs)
+    (Right <$> executionLogBuildInputs bte entity targetDesc (Vector.toList inputDescs))
 
 tryApplyExecutionLog ::
   BuildTargetEnv -> Parallelism.Entity -> TargetDesc -> Db.ExecutionLog ->
@@ -577,7 +579,7 @@ verifyOutputDescs db bte@BuildTargetEnv{..} esOutputsDescs = {-# SCC "verifyOutp
         \stat (Db.OutputDesc oldStatDesc oldMContentDesc) -> do
               verifyDesc "output(stat)" (return (fileStatDescOfStat stat)) oldStatDesc
               verifyMDesc "output(content)"
-                (fileContentDescOfStat "When applying execution log (output)"
+                (fileContentDescOfStat"When applying execution log (output)"
                  db filePath stat) oldMContentDesc
 
 verifyFileDesc ::
@@ -610,10 +612,10 @@ invalidateCachedStat buildsome filePath = liftIO $ atomicModifyIORef'_ (bsCached
 verifyInputDescs ::
   MonadIO f =>
   Buildsome ->
-  [(FilePath, (FileDesc ne Db.ExistingInputDesc))] ->
+  Vector (FilePath, (FileDesc ne Db.ExistingInputDesc)) ->
   EitherT (ByteString, FilePath) f ()
 verifyInputDescs buildsome elInputsDescs = {-# SCC "verifyInputDescs" #-} do
-  forM_ elInputsDescs $ \(filePath, desc) ->
+  Vector.forM_ elInputsDescs $ \(filePath, desc) ->
     annotateError filePath $
       verifyFileDesc buildsome"input" filePath desc $ \stat (Db.ExistingInputDescOf mModeAccess mStatAccess mContentAccess) ->
       do
@@ -645,7 +647,7 @@ executionLogVerifyFilesState bte@BuildTargetEnv{..} TargetDesc{..} el@Db.Executi
   executionLogVerifyInputOutputs bte el
   liftIO $
     replayExecutionLog bte tdTarget
-    (S.fromList $ map fst $ Db.elInputsDescs el) (S.fromList $ map fst elOutputsDescs)
+    (S.fromList $ Vector.toList $ Vector.map fst $ Db.elInputsDescs el) (S.fromList $ map fst elOutputsDescs)
     elStdoutputs elSelfTime
 
 executionLogBuildInputs ::
@@ -718,8 +720,8 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
   let speculativeReason = Db.BecauseSpeculative (Db.BecauseHooked FSHook.AccessDocEmpty)
       buildInputs inputs = do
           _ <- executionLogBuildInputsSpeculative bte entity targetDesc
-              $ M.toList . M.fromList -- remove duplicates
-              $ concatMap (map (fmap Db.toFileDesc) . Db.unELBranchPath)
+              $ Vector.fromList . M.toList . M.fromList -- remove duplicates
+              $ concatMap (Vector.toList . Vector.map (fmap Db.toFileDesc) . Db.unELBranchPath)
               $ inputs
           return ()
   mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (verifyInputDescs bteBuildsome)
@@ -1067,7 +1069,7 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = {-# SCC "
   return Db.ExecutionLogOf
     { elBuildId = bsBuildId buildsome
     , elCommand = targetCmds target
-    , elInputBranchPath = Db.ELBranchPath $ M.toList $ fmap Db.fromFileDesc inputsDescs
+    , elInputBranchPath = Db.ELBranchPath $ Vector.fromList $ M.toList $ fmap Db.fromFileDesc inputsDescs
     , elOutputsDescs = outputDescPairs
     , elStdoutputs = stdOutputs
     , elSelfTime = selfTime
@@ -1211,7 +1213,7 @@ buildTarget bte@BuildTargetEnv{..} entity TargetDesc{..} = {-# SCC "buildTarget"
                     , tsExistingInputs =
                       case putInputsInStats of
                       PutInputsInStats ->
-                          Just $ targetAllInputs tdTarget ++ [ path | (path, FileDescExisting _) <- Db.elInputsDescs el ]
+                          Just $ targetAllInputs tdTarget ++ Vector.toList (Vector.map fst $ Db.elInputsDescs el)
                       Don'tPutInputsInStats -> Nothing
                     }
                   , Stats.stdErr =

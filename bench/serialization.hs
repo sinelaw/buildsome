@@ -2,6 +2,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE DeriveGeneric     #-}
 module Main where
 
 import           Prelude.Compat          hiding (FilePath)
@@ -10,6 +11,12 @@ import           Buildsome.BuildId       (BuildId (..))
 import qualified Buildsome.Db            as Db
 import           Control.Monad.IO.Class  (MonadIO (..))
 import           Data.ByteString.Lazy    (ByteString)
+import           GHC.Generics               (Generic)
+import           Control.DeepSeq            (NFData (..))
+import           Control.DeepSeq.Generics   (genericRnf)
+import           Data.Vector                (Vector)
+import qualified Data.Vector                as Vector
+
 import qualified Lib.Directory           as Dir
 import           Lib.FileDesc            (FileDesc (..), fileContentDescOfStat,
                                           fileModeDescOfStat,
@@ -38,9 +45,14 @@ getFileDescInput reason filePath = {-# SCC "getFileDescInput" #-} do
               , Db.idContentAccess = Just (reason, contentDesc)
               }
 
+data STuple = STuple {-# UNPACKED #-} !Db.StringKey {-# UNPACKED #-} !(Db.InputDescOf Db.StringKey)
+    deriving (Generic)
+instance NFData STuple where rnf = genericRnf
+instance Binary STuple
+
 main :: IO ()
 main = do
-    let dummyKey = Db.StringKeyShort "dummy"
+    let dummyKey = Db.StringKey "dummy"
 
     testValue <- fmap (const dummyKey) <$> getFileDescInput (Db.BecauseHintFrom []) "/tmp"
 
@@ -49,12 +61,18 @@ main = do
             Db.ExecutionLogOf
             { Db.elBuildId = BuildId "dummy"
             , Db.elCommand = dummyKey
-            , Db.elInputBranchPath = Db.ELBranchPath . take 1000 $ repeat (dummyKey, testValue)
+            , Db.elInputBranchPath = Db.ELBranchPath . Vector.fromList . take 1000 $ repeat (dummyKey, testValue)
             , Db.elOutputsDescs = [(dummyKey, FileDescNonExisting ())]
             , Db.elStdoutputs = StdOutputs dummyKey dummyKey
             , Db.elSelfTime = 0
             } :: Db.ExecutionLogOf Db.StringKey
         encodedExecutionLog = encode executionLog
+        encodedELBranchPath = encode (Db.elInputBranchPath executionLog)
+        dummyTuple = (dummyKey, testValue)
+        encodedDummyTuple = encode dummyTuple
+
+        dummySTuple = STuple (fst dummyTuple) (snd dummyTuple)
+        encodedDummySTuple = encode dummySTuple
 
     Db.with "Buildsome.mk.db" $ \db -> do
         let elKey = Db.ExecutionLogNodeKey $ md5 "1234"
@@ -64,13 +82,25 @@ main = do
               [ bench "encode" $ nf encode testValue
               , bench "decode" $ nf (decode :: ByteString -> Db.InputDescOf Db.StringKey) encoded ]
 
-            , bgroup "ExecutionLogForDb"
-              [ bench "encode" $ nf encode executionLog
-              , bench "decode" $ nf (decode :: ByteString -> Db.ExecutionLogOf Db.StringKey) encodedExecutionLog ]
+            -- , bgroup "STuple"
+            --   [ bench "encode" $ nf encode dummyTuple
+            --   , bench "decode" $ nf (decode :: ByteString -> STuple) encodedDummySTuple ]
 
-            , bgroup "Db"
-              [ bench "write" $ nfIO (Db.writeIRef elIRef (Db.ExecutionLogNodeLeaf executionLog))
-              , bench "read" $ nfIO (Db.readIRef elIRef)
-              ]
+            -- , bgroup "(StringKey, InputDescOf StringKey)"
+            --   [ bench "encode" $ nf encode dummyTuple
+            --   , bench "decode" $ nf (decode :: ByteString -> (Db.StringKey, Db.InputDescOf Db.StringKey)) encodedDummyTuple ]
+
+            -- , bgroup ("ELBranchPath, length=" ++ show (Vector.length (Db.unELBranchPath $ Db.elInputBranchPath executionLog)))
+            --   [ bench "encode" $ nf encode (Db.elInputBranchPath executionLog)
+            --   , bench "decode" $ nf (decode :: ByteString -> Db.ELBranchPath Db.StringKey) encodedELBranchPath ]
+
+            -- , bgroup "ExecutionLogForDb"
+            --   [ bench "encode" $ nf encode executionLog
+            --   , bench "decode" $ nf (decode :: ByteString -> Db.ExecutionLogOf Db.StringKey) encodedExecutionLog ]
+
+            -- , bgroup "Db"
+            --   [ bench "write" $ nfIO (Db.writeIRef elIRef (Db.ExecutionLogNodeLeaf executionLog))
+            --   , bench "read" $ nfIO (Db.readIRef elIRef)
+            --   ]
             ]
 

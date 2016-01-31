@@ -52,7 +52,9 @@ import           Data.Maybe                 (fromMaybe)
 import           Data.IORef
 import           Data.Map                   (Map)
 import qualified Data.Map                   as Map
-
+import           Data.Vector                (Vector)
+import qualified Data.Vector                as Vector
+import           Data.Vector.Binary
 import           Data.Monoid                ((<>))
 import           Data.Set                   (Set)
 import qualified Data.Set                   as S
@@ -82,6 +84,7 @@ import           Lib.TimeInstances          ()
 import           Prelude.Compat             hiding (FilePath)
 import qualified System.Posix.ByteString    as Posix
 
+
 schemaVersion :: ByteString
 schemaVersion = "schema.ver.21"
 
@@ -102,20 +105,20 @@ data Db = Db
   }
 
 data FileContentDescCache = FileContentDescCache
-  { fcdcModificationTime :: POSIXTime
-  , fcdcFileContentDesc  :: FileContentDesc
+  { fcdcModificationTime :: !POSIXTime
+  , fcdcFileContentDesc  :: !FileContentDesc
   } deriving (Generic, Show)
 instance Binary FileContentDescCache
 
 data ReasonOf a
-  = BecauseSpeculative (ReasonOf a)
-  | BecauseHintFrom [a]
-  | BecauseHooked FSHook.AccessDoc
-  | BecauseChildOfFullyRequestedDirectory (ReasonOf a)
-  | BecauseContainerDirectoryOfInput (ReasonOf a) a
-  | BecauseContainerDirectoryOfOutput a
-  | BecauseInput (ReasonOf a) a
-  | BecauseRequested ByteString
+  = BecauseSpeculative !(ReasonOf a)
+  | BecauseHintFrom ![a]
+  | BecauseHooked !FSHook.AccessDoc
+  | BecauseChildOfFullyRequestedDirectory !(ReasonOf a)
+  | BecauseContainerDirectoryOfInput !(ReasonOf a) a
+  | BecauseContainerDirectoryOfOutput !a
+  | BecauseInput !(ReasonOf a) !a
+  | BecauseRequested !ByteString
   | BecauseTryingToResolveCache
   deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance NFData a => NFData (ReasonOf a) where rnf = genericRnf
@@ -124,9 +127,9 @@ instance Binary (ReasonOf StringKey)
 type Reason = ReasonOf FilePath
 
 data ExistingInputDescOf a = ExistingInputDescOf
-  { idModeAccess    :: Maybe (a, FileModeDesc)
-  , idStatAccess    :: Maybe (a, FileStatDesc)
-  , idContentAccess :: Maybe (a, FileContentDesc)
+  { idModeAccess    :: !(Maybe (a, FileModeDesc))
+  , idStatAccess    :: !(Maybe (a, FileStatDesc))
+  , idContentAccess :: !(Maybe (a, FileContentDesc))
   } deriving (Generic, Show, Ord, Eq, Functor, Foldable, Traversable)
 instance NFData a => NFData (ExistingInputDescOf a) where rnf = genericRnf
 
@@ -147,8 +150,8 @@ inputDescDropReasons :: ExistingInputDesc -> ExistingInputDescOf ()
 inputDescDropReasons = fmap (const ())
 
 data OutputDesc = OutputDesc
-  { odStatDesc    :: FileStatDesc
-  , odContentDesc :: Maybe FileContentDesc -- Nothing if directory
+  { odStatDesc    :: !FileStatDesc
+  , odContentDesc :: !(Maybe FileContentDesc) -- Nothing if directory
   } deriving (Generic, Show, Eq)
 instance Binary OutputDesc
 instance NFData OutputDesc where rnf = genericRnf
@@ -191,14 +194,15 @@ fromFileDesc :: FileDescInputOf a -> InputDescOf a
 fromFileDesc (FileDescNonExisting r) = InputDescOfNonExisting r
 fromFileDesc (FileDescExisting a) = InputDescOfExisting a
 
-newtype ELBranchPath a = ELBranchPath { unELBranchPath :: [(a, InputDescOf a)] }
+
+newtype ELBranchPath a = ELBranchPath { unELBranchPath :: Vector (a, InputDescOf a) }
     deriving (Show, Generic, Functor, Foldable, Traversable)
 instance NFData a => NFData (ELBranchPath a) where rnf = genericRnf
 instance Binary (ELBranchPath StringKey)
 
 splitBranchPathAt :: Int -> ELBranchPath a -> (ELBranchPath a, ELBranchPath a)
 splitBranchPathAt x (ELBranchPath p) = (ELBranchPath prefix, ELBranchPath suffix)
-    where (prefix, suffix) = List.splitAt x p
+    where (prefix, suffix) = Vector.splitAt x p
 
 data ExecutionLogOf s = ExecutionLogOf
   { elBuildId         :: BuildId
@@ -211,8 +215,8 @@ data ExecutionLogOf s = ExecutionLogOf
 instance NFData a => NFData (ExecutionLogOf a) where rnf = genericRnf
 instance Binary (ExecutionLogOf StringKey)
 
-elInputsDescs :: ExecutionLogOf s -> [(s, FileDescInputOf s)]
-elInputsDescs = map (fmap toFileDesc) . unELBranchPath . elInputBranchPath
+elInputsDescs :: ExecutionLogOf s -> Vector (s, FileDescInputOf s)
+elInputsDescs = Vector.map (fmap toFileDesc) . unELBranchPath . elInputBranchPath
 
 type ExecutionLog = ExecutionLogOf ByteString
 type ExecutionLogForDb = ExecutionLogOf StringKey
@@ -433,21 +437,21 @@ firstRightAlt (EitherT m) (EitherT n) =
 firstRight :: (Monad m, Foldable t) => t (EitherT (Maybe e) m a) -> EitherT (Maybe e) m a
 firstRight = foldr firstRightAlt (left Nothing)
 
-type InputVerifier m = [(FilePath, FileDescInput)] -> EitherT (ByteString, FilePath) m ()
+type InputVerifier m = Vector (FilePath, FileDescInput) -> EitherT (ByteString, FilePath) m ()
 
 executionLogPathCheck ::
     (MonadIO m) =>
     InputVerifier m -> ELBranchPath FilePath
     -> EitherT (ByteString, FilePath) m ()
 executionLogPathCheck inputVerifier (ELBranchPath path) = {-# SCC "executionLogPathCheck" #-}
-    inputVerifier $ map (\(f,i) -> (f, toFileDesc i)) path
+    inputVerifier $ Vector.map (\(f,i) -> (f, toFileDesc i)) path
 
 mapLeftT :: Monad m => (e -> f) -> EitherT e m a -> EitherT f m a
 mapLeftT f = bimapEitherT f id
 
 executionLogPathCmp :: ELBranchPath StringKey -> ELBranchPath StringKey -> Bool
 executionLogPathCmp (ELBranchPath x) (ELBranchPath y) =
-    all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ zip x y
+    Vector.all (\(xf, yf) -> (fst xf == fst yf) && cmpFileDescInput (snd xf) (snd yf)) $ Vector.zip x y
 
 pathChunkSize :: Int
 pathChunkSize = 500
@@ -484,13 +488,13 @@ executionLogLookup' iref db prepareInputs inputVerifier = {-# SCC "executionLogL
 
 executionLogNodeKey :: ExecutionLogNodeKey -> ELBranchPath StringKey -> ExecutionLogNodeKey
 executionLogNodeKey (ExecutionLogNodeKey oldKey) (ELBranchPath is) =
-    ExecutionLogNodeKey $ oldKey <> mconcat (map (\(sk, x) -> fromStringKey sk <> Hash.md5 (encode x)) is)
+    ExecutionLogNodeKey $ oldKey <> Vector.foldl' (<>) mempty (Vector.map (\(sk, x) -> fromStringKey sk <> Hash.md5 (encode x)) is)
 
 executionLogNodeRootKey :: Makefile.Target -> ExecutionLogNodeKey
 executionLogNodeRootKey = ExecutionLogNodeKey . targetKey TargetLogExecutionLogNode
 
 pathDropReasons :: ELBranchPath a -> ELBranchPath a
-pathDropReasons = ELBranchPath . map (\(f, d) -> (f, mapInputDescOfReason (const BecauseTryingToResolveCache) d)) . unELBranchPath
+pathDropReasons = ELBranchPath . Vector.map (\(f, d) -> (f, mapInputDescOfReason (const BecauseTryingToResolveCache) d)) . unELBranchPath
 
 executionLogInsert :: Db -> ExecutionLogNodeKey -> ExecutionLog -> ELBranchPath StringKey -> IO ExecutionLogNodeKey
 executionLogInsert db key el path' = {-# SCC "executionLogInsert" #-} do
@@ -498,12 +502,12 @@ executionLogInsert db key el path' = {-# SCC "executionLogInsert" #-} do
         (prefix, suffix) = splitBranchPathAt pathChunkSize path
 
     debugPrint $ "executionLogInsert: inputsLeft: " <> (show $ length $ unELBranchPath path)
-    case unELBranchPath prefix of
-        [] -> do
+    if Vector.null (unELBranchPath prefix)
+        then do
             eldb <- putExecutionLog db el
             writeIRef (executionLogNode key db) $ ExecutionLogNodeLeaf eldb
             return key
-        _  -> do
+        else do
             let k = executionLogNodeKey key prefix
             leafKey <- executionLogInsert db k el suffix
             writeIRef (executionLogNode key db) $ ExecutionLogNodeBranch [(prefix, k)]
@@ -519,7 +523,7 @@ executionLogUpdate target db el = do
 
 executionLogUpdate' :: IRef ExecutionLogNode -> ExecutionLogNodeKey -> Db -> ExecutionLog
                        -> ELBranchPath StringKey -> IO ExecutionLogNodeKey
-executionLogUpdate' iref key db el (ELBranchPath []) = do
+executionLogUpdate' iref key db el (ELBranchPath vs) | Vector.null vs = do
     -- TODO validate current iref key matches inputsPassed?
     eldb <- putExecutionLog db el
     writeIRef iref (ExecutionLogNodeLeaf eldb)

@@ -3,7 +3,7 @@ flags:
     Charts: False
 packages:
 - '.'
+- /home/noam/repos/thirdparty/leveldb-haskell-0.6.3
 extra-deps:
-- leveldb-haskell-0.6.3
 - system-argv0-0.1.1
 resolver: lts-3.0

@@ -48,9 +48,9 @@ import qualified System.Posix.ByteString as Posix
 type ContentHash = Hash
 
 data FileContentDesc
-  = FileContentDescRegular ContentHash
-  | FileContentDescSymlink FilePath
-  | FileContentDescDir ContentHash -- Of the getDirectoryContents
+  = FileContentDescRegular !ContentHash
+  | FileContentDescSymlink !FilePath
+  | FileContentDescDir !ContentHash -- Of the getDirectoryContents
   deriving (Generic, Eq, Show, Ord)
 instance Binary FileContentDesc
 instance NFData FileContentDesc where rnf = genericRnf
@@ -62,7 +62,7 @@ instance Cmp FileContentDesc where
   FileContentDescSymlink _ `cmp` _ = Cmp.NotEquals ["symlink vs. non-symlink"]
   FileContentDescDir _ `cmp` _ = Cmp.NotEquals ["dir vs. non-dir"]
 
-data FileModeDesc = FileModeDesc Posix.FileMode
+newtype FileModeDesc = FileModeDesc Posix.FileMode
   deriving (Generic, Eq, Show, Ord)
 instance Binary FileModeDesc
 instance NFData FileModeDesc where rnf = const () -- TODO: ok?
@@ -112,8 +112,8 @@ instance Cmp FullStatEssence where
       cShow = cmpGetterBy Cmp.eqShow
 
 data FileStatDesc
-  = FileStatDirectory BasicStatEssence
-  | FileStatOther FullStatEssence
+  = FileStatDirectory !BasicStatEssence
+  | FileStatOther !FullStatEssence
   deriving (Generic, Eq, Show, Ord)
   -- Weird deriving order!
 instance Binary FileStatDesc
@@ -131,6 +131,7 @@ instance Binary Posix.CMode where
 
 data UnsupportedFileTypeError = UnsupportedFileTypeError FilePath deriving (Show, Typeable)
 instance E.Exception UnsupportedFileTypeError
+
 
 -- Basic stat essence compares only things that do not change in a
 -- directory stat when files are changed/created in that directory
@@ -172,8 +173,8 @@ fileContentDescOfStat path stat
   | otherwise = E.throwIO $ UnsupportedFileTypeError path
 
 data FileDesc ne e
-  = FileDescNonExisting ne
-  | FileDescExisting e
+  = FileDescNonExisting !ne
+  | FileDescExisting !e
   deriving (Generic, Eq, Ord, Show, Functor, Foldable, Traversable)
 instance (Binary ne, Binary e) => Binary (FileDesc ne e)
 instance (NFData ne, NFData e) => NFData (FileDesc ne e) where rnf = genericRnf
