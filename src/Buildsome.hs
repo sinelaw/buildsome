@@ -616,7 +616,7 @@ verifyInputDescs buildsome elInputsDescs = {-# SCC "verifyInputDescs" #-} do
   forM_ elInputsDescs $ \(filePath, desc) ->
     annotateError filePath $
       verifyFileDesc buildsome"input" filePath desc $ \stat (Db.ExistingInputDescOf mModeAccess mStatAccess mContentAccess) ->
-      unless (mtimeSame stat mStatAccess) $ do
+      do
           let verify str getDesc mPair =
                   verifyMDesc ("input(" <> str <> ")") getDesc $ snd <$> mPair
           verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
@@ -626,9 +626,6 @@ verifyInputDescs buildsome elInputsDescs = {-# SCC "verifyInputDescs" #-} do
                db filePath stat) $ fmap snd mContentAccess
   where
     db = bsDb buildsome
-    mtimeSame stat (Just (_, FileDesc.FileStatOther fullStatEssence)) =
-        (Posix.modificationTimeHiRes stat) == (FileDesc.modificationTimeHiRes fullStatEssence)
-    mtimeSame _ _ = False
 
 executionLogVerifyInputOutputs ::
   MonadIO m =>
@@ -746,9 +743,7 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
 
     applyExecutionLog executionLog = do
       verbosePrint bte . mconcat $
-        [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)), ":\n\t"
-        , ColorText.intercalate "\n\t" $ map show $ Db.elInputsDescs executionLog
-        ]
+        [ "Found execution log of ", cTarget (show (targetOutputs tdTarget)) ]
       eRes <- tryApplyExecutionLog bte entity TargetDesc{..} executionLog
       case eRes of
         Left (SpeculativeBuildFailure exception)
