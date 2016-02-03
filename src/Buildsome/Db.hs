@@ -38,19 +38,20 @@ import           Buildsome.BuildId          (BuildId)
 import           Control.Applicative        (Alternative (..), (<|>))
 import           Control.DeepSeq            (NFData (..))
 import           Control.DeepSeq.Generics   (genericRnf)
-import           Control.Monad              (join, liftM)
+import           Control.Monad              (join, liftM, forM_)
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Control.Monad.Trans.Either (EitherT (..), left, runEitherT, bimapEitherT)
 import           Data.Binary                (Binary (..))
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS8
 import           Data.Default               (def)
+import           Data.Foldable              (toList)
 import qualified Data.List                  as List
 import           Data.Maybe                 (fromMaybe)
 
 import           Data.IORef
-import           Data.Map                   (Map)
-import qualified Data.Map                   as Map
+import           Data.Map.Strict            (Map)
+import qualified Data.Map.Strict            as Map
 
 import           Data.Monoid                ((<>))
 import           Data.Set                   (Set)
@@ -304,31 +305,32 @@ fromStringKey (StringKey s) = Hash.Hash s
 string :: Hash -> Db -> IRef ByteString
 string k = mkIRefKey $ "s:" <> Hash.asByteString k
 
-updateItem :: Ord k => IORef (Map k v) -> k -> v -> IO () -> IO ()
-updateItem ioref k s act = {-# SCC "updateItem" #-} join $ atomicModifyIORef' ioref $ \smap ->
-  case Map.lookup k smap of
-      Nothing -> (Map.insert k s smap, act)
-      Just _ -> (smap, return ())
+updateItems :: Ord k => IORef (Map k v) -> Map k v -> IO (Map k v)
+updateItems ioref kvs = {-# SCC "updateItem" #-} atomicModifyIORef' ioref $
+    \smap -> let new = kvs `Map.union` smap in (new, new)
 
-getItem :: Ord k => k -> IO v -> IORef (Map k v) ->
-           IRef v -> IO v
-getItem k act ioref iref = {-# SCC "getItem" #-} do
+getItems :: Ord k => Map k (IO v, IRef v) -> IORef (Map k v) -> IO (Map k v)
+getItems kvs ioref = {-# SCC "getItem" #-} do
     map' <- readIORef ioref
-    case Map.lookup k map' of
-        Nothing -> do
-            mv <- readIRef iref
-            case mv of
-                Just v -> do
-                    updateItem ioref k v $ return ()
-                    return v
-                Nothing -> do
-                    v <- act
-                    putItem k v ioref iref
-                    return v
-        Just v -> return v
+    let missing = kvs `Map.difference` map'
+    filled <- flip traverse missing $ \(iov, irefv) -> do
+        mv <- readIRef irefv
+        case mv of
+            Just v -> return v
+            Nothing -> do
+                v <- iov
+                writeIRef irefv v
+                return v
+    (`Map.intersection` kvs) <$> updateItems ioref filled
 
-putItem :: Ord k => k -> v -> IORef (Map k v) -> IRef v -> IO ()
-putItem k v ioref iref = {-# SCC "putItem" #-} updateItem ioref k v $ writeIRef iref v
+putItems :: Ord k => Map k (v, IRef v) -> IORef (Map k v) -> IO ()
+putItems kvs ioref = {-# SCC "putItem" #-} do
+    forM_ (Map.elems kvs) (\(v, irefv) -> writeIRef irefv v)
+    _ <- updateItems ioref $ Map.map fst kvs
+    return ()
+
+putItem :: Ord k => k -> a -> IRef a -> IORef (Map k a) -> IO ()
+putItem k v irefv iref = putItems (Map.singleton k (v, irefv)) iref
 
 md5LengthInBytes :: Int
 md5LengthInBytes = 16
@@ -340,14 +342,19 @@ stringShouldSkipHash :: ByteString -> Bool
 stringShouldSkipHash s = len < stringKeyMinLength && len /= md5LengthInBytes
     where len = BS8.length s
 
-getString :: Db -> StringKey -> IO ByteString
-getString db (StringKey s)      = {-# SCC "getString" #-}
-    if stringShouldSkipHash s
-    then return s
-    else getItem k missingError (dbStrings db) (string k db)
+getStrings :: Db -> [StringKey] -> IO (Map StringKey ByteString)
+getStrings db sks = {-# SCC "getString" #-} do
+    let (skip, reallyGet) = List.partition (\(StringKey s) -> stringShouldSkipHash s) sks
+    gotten <- Map.mapKeys (StringKey . Hash.asByteString) <$> getItems (actionMap reallyGet) (dbStrings db)
+    return $ foldr (\k@(StringKey s) -> Map.insert k s) gotten skip
     where
-        k = Hash.Hash s
-        missingError = error $ "Corrupt DB? Missing string for key: " <> show k
+        actionMap ks =
+            Map.fromList
+            $ flip map ks
+            $ (\k@(StringKey s) ->
+                  let h = Hash.Hash s
+                  in (h, (missingError k, string h db)))
+        missingError k = error $ "Corrupt DB? Missing string for key: " <> show k
 
 putString :: Db -> ByteString -> IO StringKey
 putString db s = {-# SCC "putString" #-}
@@ -355,16 +362,17 @@ putString db s = {-# SCC "putString" #-}
     then return $ StringKey s
     else do
         let k = Hash.md5 s
-        putItem k s (dbStrings db) (string k db)
+        putItem k s (string k db) (dbStrings db)
         return $ StringKey $ Hash.asByteString k
 
 getContentCache :: Db -> FilePath -> IO FileContentDescCache -> IO FileContentDescCache
 getContentCache db filePath act =
-    getItem filePath act (dbContentCache db) (fileContentDescCache filePath db)
+    getItems (Map.singleton filePath (act, fileContentDescCache filePath db)) (dbContentCache db)
+    >>= (return . mustJust . Map.lookup filePath)
 
 putContentCache :: Db -> FilePath -> FileContentDescCache -> IO ()
 putContentCache db filePath contentDesc =
-    putItem filePath contentDesc (dbContentCache db) (fileContentDescCache filePath db)
+    putItem filePath contentDesc (fileContentDescCache filePath db) (dbContentCache db)
 
 -- TODO: Canonicalize commands (whitespace/etc)
 targetKey :: TargetLogType -> Makefile.Target -> Hash
@@ -404,7 +412,7 @@ cmpFileDescInput InputDescOfNonExisting{} InputDescOfNonExisting{} = True
 cmpFileDescInput _                        _                        = False
 
 getExecutionLog :: Db -> ExecutionLogForDb -> IO ExecutionLog
-getExecutionLog = traverse . getString
+getExecutionLog = traverseGetStrings
 
 putExecutionLog :: Db -> ExecutionLog -> IO ExecutionLogForDb
 putExecutionLog = traverse . putString
@@ -441,8 +449,12 @@ executionLogPathCmp (ELBranchPath x) (ELBranchPath y) =
 pathChunkSize :: Int
 pathChunkSize = 500
 
-getPathStrings :: Db -> ELBranchPath StringKey -> IO (ELBranchPath FilePath)
-getPathStrings db = traverse (getString db)
+mustJust (Just x) = x
+
+traverseGetStrings :: (Functor f, Foldable f) => Db -> f StringKey -> IO (f ByteString)
+traverseGetStrings db path = do
+    strings <- getStrings db $ toList path
+    return $ fmap (mustJust . flip Map.lookup strings) path
 
 putPathStrings :: Db -> ELBranchPath FilePath -> IO (ELBranchPath StringKey)
 putPathStrings db = traverse (putString db)
@@ -460,7 +472,7 @@ executionLogLookup' iref db prepareInputs inputVerifier = {-# SCC "executionLogL
             debugPrint $ "executionLogLookup': found: " <> take 50 (show $ elCommand el)
             liftIO $ getExecutionLog db el
         Just (ExecutionLogNodeBranch mapOfMaps) -> do
-            resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> getPathStrings db p) mapOfMaps
+            resolvedPaths <- liftIO $ mapM (\(p, t) -> (,t) <$> traverseGetStrings db p) mapOfMaps
             buildInputsRes <- liftIO $ runEitherT $ do
                 prepareInputs $ map fst resolvedPaths
             case buildInputsRes of
