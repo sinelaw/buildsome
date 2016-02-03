@@ -622,7 +622,7 @@ getCachedSubDirHashes buildsome filePath = {-# SCC "getCachedSubDirHashes" #-} d
 
 
 cachedBuildMapFind :: Buildsome -> FilePath -> IO (Maybe (TargetKind, TargetDesc))
-cachedBuildMapFind buildsome filePath = do
+cachedBuildMapFind buildsome filePath = {-# SCC "cachedBuildMapFind" #-} do
   mHashes <- liftIO $ SyncMap.lookup (bsCachedBuildMapResults buildsome) filePath
   case mHashes of
       Nothing -> liftIO $ SyncMap.insert (bsCachedBuildMapResults buildsome) filePath updateCache
