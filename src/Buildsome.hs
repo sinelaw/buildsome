@@ -653,37 +653,65 @@ validateSubTreeContent buildsome path listingHash statHash = do
   when (curStatHash /= statHash) $ left "stats changed"
   return ()
 
+inputDescSameMTime :: POSIXTime -> Maybe (t, FileDesc.FileStatDesc) -> Bool
+inputDescSameMTime mtime (Just (_, FileDesc.FileStatOther fullStatEssence)) =
+    mtime == (FileDesc.modificationTimeHiRes fullStatEssence)
+inputDescSameMTime _ _ = False
+
+quickVerifyInputDescs ::
+    (IsString e, Foldable t, Monoid e, MonadIO f) =>
+    Buildsome
+    -> t (FilePath, FileDesc ne (Db.ExistingInputDescOf s))
+    -> EitherT (e, FilePath) f ()
+quickVerifyInputDescs buildsome elInputsDescs = do
+  forM_ elInputsDescs $ \(filePath, desc) ->
+    annotateError filePath $
+      verifyFileDesc buildsome "input" filePath desc (checkInput filePath)
+   where
+      checkInput filePath _ (Db.ExistingInputDescOfSubTree listingHash statHash) =
+          validateSubTreeContent buildsome filePath listingHash statHash
+      checkInput filePath stat (Db.ExistingInputDescOf _ mStatAccess _) =
+          unless (inputDescSameMTime (Posix.modificationTimeHiRes stat) mStatAccess) $
+          left "mtime differs"
+
 verifyInputDescs ::
   MonadIO f =>
   Buildsome ->
   [(FilePath, (FileDesc ne Db.ExistingInputDesc))] ->
   EitherT (ByteString, FilePath) f ()
 verifyInputDescs buildsome elInputsDescs = {-# SCC "verifyInputDescs" #-} do
-  forM_ elInputsDescs $ \(filePath, desc) ->
-    annotateError filePath $
-      verifyFileDesc buildsome "input" filePath desc (validateExistingInputDesc filePath)
+  forM_ elInputsDescs (uncurry $ cachedVerifyInputDesc buildsome)
+
+cachedVerifyInputDesc buildsome filePath desc = do
+  annotateError filePath $
+    verifyFileDesc buildsome "input" filePath desc (validateExistingInputDesc filePath)
+  return ()
   where
     validateExistingInputDesc filePath _    (Db.ExistingInputDescOfSubTree listingHash statHash) =
         validateSubTreeContent buildsome filePath listingHash statHash
-    validateExistingInputDesc filePath stat (Db.ExistingInputDescOf mModeAccess mStatAccess mContentAccess) =
-        unless (mtimeSame stat mStatAccess) $ do
-        let verify str getDesc mPair =
-                verifyMDesc ("input(" <> str <> ")") getDesc $ snd <$> mPair
-        verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
-        verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
-        verifyMDesc "content"
-            (fileContentDescOfStat "When applying execution log (input)"
-             db filePath stat) $ fmap snd mContentAccess
+    validateExistingInputDesc filePath stat (Db.ExistingInputDescOf mModeAccess mStatAccess mContentAccess) = do
+        mVerifiedMTime <- liftIO $ SyncMap.lookup (bsCachedVerifiedInputs buildsome) filePath
+        let
+            isSameMTime = case mVerifiedMTime of
+                Nothing -> inputDescSameMTime (Posix.modificationTimeHiRes stat) mStatAccess
+                Just mtime -> inputDescSameMTime mtime mStatAccess
+        unless isSameMTime $ do
+            let verify str getDesc mPair =
+                    verifyMDesc ("input(" <> str <> ")") getDesc $ snd <$> mPair
+            verify "mode" (return (fileModeDescOfStat stat)) mModeAccess
+            verify "stat" (return (fileStatDescOfStat stat)) mStatAccess
+            verifyMDesc "content"
+                (fileContentDescOfStat "When applying execution log (input)"
+                 db filePath stat) $ fmap snd mContentAccess
+            liftIO $ SyncMap.insert (bsCachedVerifiedInputs buildsome) filePath (return $ Posix.modificationTimeHiRes stat)
+            return ()
     db = bsDb buildsome
-    mtimeSame stat (Just (_, FileDesc.FileStatOther fullStatEssence)) =
-        (Posix.modificationTimeHiRes stat) == (FileDesc.modificationTimeHiRes fullStatEssence)
-    mtimeSame _ _ = False
 
 executionLogVerifyInputOutputs ::
   MonadIO m =>
   BuildTargetEnv -> Db.ExecutionLog ->
   EitherT (ByteString, FilePath) m ()
-executionLogVerifyInputOutputs bte@BuildTargetEnv{..} el@Db.ExecutionLogOf{..} = {-# SCC "executionLogVerifyFilesState" #-} do
+executionLogVerifyInputOutputs bte@BuildTargetEnv{..} el@Db.ExecutionLogOf{..} = {-# SCC "executionLogVerifyInputOutputs" #-} do
   verifyInputDescs bteBuildsome $ Db.elInputsDescs el
   verifyOutputDescs db bte elOutputsDescs
   where
@@ -777,7 +805,7 @@ findApplyExecutionLog bte@BuildTargetEnv{..} entity targetDesc@TargetDesc{..} = 
               $ concatMap (map (fmap Db.toFileDesc) . Db.unELBranchPath)
               $ inputs
           return ()
-  mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (verifyInputDescs bteBuildsome)
+  mExecutionLog <- Db.executionLogLookup tdTarget db buildInputs (quickVerifyInputDescs bteBuildsome)
   case mExecutionLog of
     Left Nothing -> handleCacheMiss
     Left (Just missingInput) -> do
@@ -1433,6 +1461,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
     statsCache <- SyncMap.new
     subDirCache <- SyncMap.new
     buildMapsCache <- SyncMap.new
+    mtimesCache <- SyncMap.new
     let
       killOnce msg exception =
         void $ E.uninterruptibleMask_ $ runOnce $ do
@@ -1461,6 +1490,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
         , bsMaxCacheSize = optMaxCacheSize
         , bsCachedSubDirHashes = subDirCache
         , bsCachedBuildMapResults = buildMapsCache
+        , bsCachedVerifiedInputs = mtimesCache
         }
     deleteRemovedOutputs buildsome printer db phoniesSet
     withInstalledSigintHandler

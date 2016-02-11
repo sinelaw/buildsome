@@ -12,11 +12,12 @@ import           Buildsome.Stats (Stats)
 import qualified Control.Exception as E
 import           Data.ByteString (ByteString)
 import           Data.Set (Set)
+import           Data.Time.Clock.POSIX (POSIXTime)
 import           Lib.ColorText (ColorText)
 import           Lib.FSHook (FSHook)
-import           Lib.Hash (Hash)
 import           Lib.FilePath (FilePath)
 import           Lib.Fresh (Fresh)
+import           Lib.Hash (Hash)
 import           Lib.Makefile (Makefile(..), Target, TargetKind, TargetDesc)
 import qualified Lib.Parallelism as Parallelism
 import           Lib.Printer (Printer)
@@ -49,6 +50,7 @@ data Buildsome = Buildsome
   , bsCachedSubDirHashes :: SyncMap FilePath (Maybe (Hash, Hash))
   , bsMaxCacheSize :: Integer
   , bsCachedBuildMapResults :: SyncMap FilePath (Maybe (TargetKind, TargetDesc))
+  , bsCachedVerifiedInputs :: SyncMap FilePath POSIXTime
   }
 
 data WaitOrCancel = Wait | CancelAndWait
