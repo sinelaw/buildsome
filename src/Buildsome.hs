@@ -324,10 +324,15 @@ buildExplicitWithParReleased ::
   BuildTargetEnv -> Parallelism.Entity -> [SlaveRequest] ->
   IO (ExplicitPathsBuilt, BuiltTargets)
 buildExplicitWithParReleased bte@BuildTargetEnv{..} entity inputs = do
+  whenVerbose bteBuildsome $
+    Printer.printStrLn btePrinter $
+    "Building inputs " <> ColorText.intercalate ", " (map (cPath . show . inputFilePath) inputs)
   built <-
     waitForSlavesWithParReleased bte entity . concat =<< mapM (slavesFor bte) inputs
   explicitPathsBuilt <- assertExplicitInputsExist bte $ map inputFilePath inputs
   return (explicitPathsBuilt, built)
+  where
+    Color.Scheme{..} = Color.scheme
 
 data IllegalUnspecifiedOutputs = IllegalUnspecifiedOutputs (ColorText -> ByteString) Target [FilePath]
   deriving (Typeable)

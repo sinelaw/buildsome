@@ -12,6 +12,7 @@ main = defaultMainWithHooks simpleUserHooks
       let verbosity = fromFlag $ buildVerbosity flags
       putStrLn "Building cbits/fs_override.so"
       (gcc, _) <- requireProgram verbosity gccProgram defaultProgramDb
+
       runProgram verbosity gcc . words $ "-o cbits/fs_override.so -g -Wall -Werror -Wextra -Winit-self -shared -fPIC -D_GNU_SOURCE " ++ unwords sources ++ " -ldl"
       return (Nothing, [])
   }

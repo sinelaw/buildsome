@@ -24,7 +24,7 @@ import Data.Monoid ((<>))
 import Control.Monad
 import Lib.Exception (bracket)
 import Lib.FilePath (FilePath, (</>))
-import System.IO.Error
+import System.IO.Error hiding (catchIOError)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as BS8
 import qualified Lib.FilePath as FilePath
@@ -33,12 +33,19 @@ import qualified System.Posix.ByteString as Posix
 import qualified Lib.Hash as Hash
 import           Lib.Hash (Hash)
 
-catchDoesNotExist :: IO a -> IO a -> IO a
-catchDoesNotExist act handler =
+
+catchIOError :: (IOErrorType -> Bool) -> IO a -> IO a -> IO a
+catchIOError f act handler =
   act `E.catch` \e ->
-  if isDoesNotExistErrorType (ioeGetErrorType e)
+  if f (ioeGetErrorType e)
   then handler
   else E.throwIO e
+
+catchDoesNotExist :: IO a -> IO a -> IO a
+catchDoesNotExist = catchIOError isDoesNotExistErrorType
+
+catchAlreadyExists :: IO a -> IO a -> IO a
+catchAlreadyExists = catchIOError isAlreadyExistsErrorType
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
 getMFileStatus path = {-# SCC "getMFileStatus" #-} do
@@ -54,7 +61,7 @@ createDirectories path
     doesExist <- FilePath.exists path
     unless doesExist $ do
       createDirectories $ FilePath.takeDirectory path
-      Posix.createDirectory path 0o777
+      Posix.createDirectory path 0o777 `catchAlreadyExists` return ()
 
 removeFileByStat :: IO () -> FilePath -> IO ()
 removeFileByStat notExist path = do

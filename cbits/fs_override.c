@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
+#include <signal.h>
 #include <errno.h>
 
 static void vtrace(enum severity, const char *fmt, va_list);
@@ -617,6 +617,12 @@ DEFINE_WRAPPER(int, execve, (const char *filename, char *const argv[], char *con
 
 /****************** open ********************/
 
+static void handle_path(const char *_path)
+{
+    raise(SIGSTOP);
+    TRACE_WARNING("Open path: '%s'", _path);
+}
+
 #define OPEN_HANDLER(_name, _path, _flags)                              \
     do {                                                                \
         initialize_process_state();                                     \
@@ -627,6 +633,9 @@ DEFINE_WRAPPER(int, execve, (const char *filename, char *const argv[], char *con
         va_start(args, _flags);                                         \
         mode_t mode = is_create ? va_arg(args, mode_t) : 0;             \
         va_end(args);                                                   \
+        if (strlen(_path) == 0) {                                       \
+        handle_path(_path);                                             \
+        }                                                               \
         switch(_flags & (O_RDONLY | O_RDWR | O_WRONLY)) {               \
         case O_RDONLY: {                                                \
             /* TODO: Remove ASSERT and correctly handle O_CREAT, O_TRUNCATE */ \
