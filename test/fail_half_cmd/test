@@ -1,0 +1,11 @@
+#!/bin/bash -eu
+buildsome=${1:-buildsome}
+
+cd $(dirname $0)
+
+if $buildsome ; then
+   echo "ERROR: Should have failed!"
+   exit 1
+else
+   echo "PASSED: Buildsome failed as expected"
+fi

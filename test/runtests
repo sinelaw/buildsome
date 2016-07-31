@@ -55,5 +55,8 @@ git clean -fdx -- compat_makefile
 pyc/test ${buildsome}
 git clean -fdx -- pyc
 
+fail_half_cmd/test ${buildsome}
+git clean -fdx -- fail_half_cmd
+
 echo PASSED ALL TESTS
 ${buildsome} --version
