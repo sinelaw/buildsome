@@ -33,12 +33,18 @@ import qualified System.Posix.ByteString as Posix
 import qualified Lib.Hash as Hash
 import           Lib.Hash (Hash)
 
-catchDoesNotExist :: IO a -> IO a -> IO a
-catchDoesNotExist act handler =
+catchErrorPred :: (IOErrorType -> Bool) -> IO a -> IO a -> IO a
+catchErrorPred pred act handler =
   act `E.catch` \e ->
-  if isDoesNotExistErrorType (ioeGetErrorType e)
+  if pred (ioeGetErrorType e)
   then handler
   else E.throwIO e
+
+catchDoesNotExist :: IO a -> IO a -> IO a
+catchDoesNotExist = catchErrorPred isDoesNotExistErrorType
+
+catchAlreadyExists :: IO a -> IO a -> IO a
+catchAlreadyExists = catchErrorPred isAlreadyExistsErrorType
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
 getMFileStatus path = {-# SCC "getMFileStatus" #-} do
@@ -54,7 +60,7 @@ createDirectories path
     doesExist <- FilePath.exists path
     unless doesExist $ do
       createDirectories $ FilePath.takeDirectory path
-      Posix.createDirectory path 0o777
+      (Posix.createDirectory path 0o777) `catchAlreadyExists` return () 
 
 removeFileByStat :: IO () -> FilePath -> IO ()
 removeFileByStat notExist path = do
