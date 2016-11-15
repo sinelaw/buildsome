@@ -86,6 +86,7 @@ library
                ,     Lib.FileDesc
                ,     Lib.FilePath
                ,     Lib.Fresh
+               ,     Lib.Hash
                ,     Lib.IORef
                ,     Lib.List
                ,     Lib.Makefile
