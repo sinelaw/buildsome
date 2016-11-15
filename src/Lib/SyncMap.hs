@@ -8,9 +8,11 @@ module Lib.SyncMap
     , tryInsert
     , insert
     , new
+    , delete
+    , lookup
     ) where
 
-import Prelude.Compat
+import Prelude.Compat hiding (lookup)
 
 import           Control.Concurrent.MVar
 import qualified Control.Exception       as E
@@ -66,5 +68,14 @@ insert syncMap key action =
     do  (_, res) <- tryInsert syncMap key action
         either E.throwIO return res
 
+lookup :: Ord k => SyncMap k a -> k -> IO (Maybe a)
+lookup (SyncMap refMap) key = readIORef refMap >>= (fmap unright . traverse readMVar . M.lookup key)
+    where
+        unright (Just (Right x)) = Just x
+        unright _                = Nothing
+
 new :: IO (SyncMap k v)
 new = SyncMap <$> newIORef M.empty
+
+delete :: Ord k => SyncMap k a -> k -> IO ()
+delete (SyncMap refMap) key = atomicModifyIORef' refMap $ (,()) <$> M.delete key
