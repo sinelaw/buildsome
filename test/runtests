@@ -4,6 +4,8 @@ set -e
 
 buildsome="$(realpath ../dist/build/buildsome/buildsome) $@"
 
+cd $(dirname $(realpath $0))
+
 ${buildsome} -f implicitphony
 git clean -fdx -- implicitphony
 
@@ -54,6 +56,9 @@ git clean -fdx -- compat_makefile
 
 pyc/test ${buildsome}
 git clean -fdx -- pyc
+
+meddling/test ${buildsome}
+git clean -fdx -- meddling
 
 echo PASSED ALL TESTS
 ${buildsome} --version
