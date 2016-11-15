@@ -14,13 +14,15 @@ import           Data.ByteString (ByteString)
 import           Data.Set (Set)
 import           Lib.ColorText (ColorText)
 import           Lib.FSHook (FSHook)
+import           Lib.Hash (Hash)
 import           Lib.FilePath (FilePath)
 import           Lib.Fresh (Fresh)
-import           Lib.Makefile (Makefile(..), Target)
+import           Lib.Makefile (Makefile(..), Target, TargetKind, TargetDesc)
 import qualified Lib.Parallelism as Parallelism
 import           Lib.Printer (Printer)
 import qualified Lib.Printer as Printer
 import           Lib.SyncMap (SyncMap)
+import qualified System.Posix.ByteString as Posix
 
 import           Prelude.Compat hiding (FilePath)
 
@@ -29,6 +31,7 @@ type Parents = [(TargetRep, Target, Reason)]
 data Buildsome = Buildsome
   { -- static:
     bsOpts :: Opt
+  , bsBuildsomePath :: FilePath
   , bsMakefile :: Makefile
   , bsPhoniesSet :: Set FilePath
   , bsBuildId :: BuildId
@@ -42,6 +45,10 @@ data Buildsome = Buildsome
   , bsFastKillBuild :: E.SomeException -> IO ()
   , bsRender :: ColorText -> ByteString
   , bsParPool :: Parallelism.Pool
+  , bsCachedStats :: SyncMap FilePath (Maybe Posix.FileStatus)
+  , bsCachedSubDirHashes :: SyncMap FilePath (Maybe (Hash, Hash))
+  , bsMaxCacheSize :: Integer
+  , bsCachedBuildMapResults :: SyncMap FilePath (Maybe (TargetKind, TargetDesc))
   }
 
 data WaitOrCancel = Wait | CancelAndWait

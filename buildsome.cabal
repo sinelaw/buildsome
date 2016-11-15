@@ -53,6 +53,7 @@ library
                ,     Buildsome.Clean
                ,     Buildsome.Color
                ,     Buildsome.CompatMakefile
+               ,     Buildsome.ContentCache
                ,     Buildsome.Db
                ,     Buildsome.FileContentDescCache
                ,     Buildsome.MagicFiles
