@@ -6,12 +6,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Lib.NonEmptyList
        ( NonEmptyList(..)
-       , head
-       , tail
        , singleton
        , cons
        , lookup
-       , fromHeadAndTail
        )
        where
 
@@ -21,17 +18,11 @@ import           Prelude.Compat hiding (head, lookup, tail)
 
 data NonEmptyList a =
   NonEmptyList
-  { neHead :: a
-  , neTail :: [a]
+  { head :: a
+  , tail :: [a]
   }
   deriving (Show, Eq, Generic, Functor, Traversable, Foldable)
 instance Binary a => Binary (NonEmptyList a)
-
-head :: NonEmptyList a -> a
-head = neHead
-
-tail :: NonEmptyList a -> [a]
-tail = neTail
 
 singleton :: a -> NonEmptyList a
 singleton x = NonEmptyList x []
@@ -46,6 +37,3 @@ lookup x (NonEmptyList (y,b) ys) = go x ((y, b):ys)
     go x' ((y', b'):ys')
       | x' == y'  = Just b'
       | otherwise = go x' ys'
-
-fromHeadAndTail :: a -> [a] -> NonEmptyList a
-fromHeadAndTail = NonEmptyList
