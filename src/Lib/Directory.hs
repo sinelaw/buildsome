@@ -1,3 +1,5 @@
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 module Lib.Directory
@@ -6,9 +8,13 @@ module Lib.Directory
   , removeFileOrDirectory
   , removeFileOrDirectoryOrNothing
   , createDirectories
+  , doesDirectoryExist
   , getDirectoryContents
+  , getDirectoryContentsRecursive
   , getDirectoryContentsHash
   , makeAbsolutePath
+  , copyFile
+  , renameFile
   ) where
 
 
@@ -24,7 +30,8 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Lib.FilePath as FilePath
 import qualified System.Directory as Dir
 import qualified System.Posix.ByteString as Posix
-import qualified Crypto.Hash.MD5 as MD5
+import qualified Lib.Hash as Hash
+import           Lib.Hash (Hash)
 
 catchDoesNotExist :: IO a -> IO a -> IO a
 catchDoesNotExist act handler =
@@ -34,7 +41,7 @@ catchDoesNotExist act handler =
   else E.throwIO e
 
 getMFileStatus :: FilePath -> IO (Maybe Posix.FileStatus)
-getMFileStatus path = do
+getMFileStatus path = {-# SCC "getMFileStatus" #-} do
   doesExist <- FilePath.exists path
   if doesExist
     then (Just <$> Posix.getFileStatus path) `catchDoesNotExist` return Nothing
@@ -70,6 +77,12 @@ removeFileOrDirectory path =
   -- the meaningful IO exception:
   (Posix.removeLink path) path
 
+isDotDir :: FilePath -> Bool
+isDotDir fn = fn == "." || fn == ".."
+
+doesDirectoryExist :: FilePath -> IO Bool
+doesDirectoryExist = Dir.doesDirectoryExist . BS8.unpack
+
 getDirectoryContents :: FilePath -> IO [FilePath]
 getDirectoryContents path =
   bracket (Posix.openDirStream path) Posix.closeDirStream go
@@ -78,17 +91,35 @@ getDirectoryContents path =
       fn <- Posix.readDirStream dirStream
       if BS8.null fn
         then return []
-        else (fn :) <$> go dirStream
+        else (if isDotDir fn then id else (fn:)) <$> go dirStream
 
-getDirectoryContentsHash :: FilePath -> IO BS8.ByteString
-getDirectoryContentsHash path =
-  bracket (Posix.openDirStream path) Posix.closeDirStream (go BS8.empty)
+getDirectoryContentsRecursive :: FilePath -> IO [FilePath]
+getDirectoryContentsRecursive path = do
+    let
+      tryGetDirectoryContents path' =
+        (getDirectoryContents path') `E.catch` \e ->
+        if isPermissionError e
+        then return [] -- TODO return something else
+        else E.throwIO e
+    files <- map (path </>) <$> tryGetDirectoryContents path
+    dirs <- map fst . filter snd <$> mapM (\f -> (f,) <$> doesDirectoryExist f) files
+    (files ++) . concat <$> forM dirs getDirectoryContentsRecursive
+
+getDirectoryContentsHash :: FilePath -> IO Hash
+getDirectoryContentsHash path = {-# SCC "getDirectoryContentsHash" #-}
+  bracket (Posix.openDirStream path) Posix.closeDirStream (go Hash.empty)
   where
     go !hash !dirStream = do
       fn <- Posix.readDirStream dirStream
       if BS8.null fn
         then return hash
-        else go (MD5.hash (hash <> fn)) dirStream
+        else go (if isDotDir fn then hash else (hash <> Hash.md5 fn)) dirStream
 
 makeAbsolutePath :: FilePath -> IO FilePath
 makeAbsolutePath path = (</> path) <$> Posix.getWorkingDirectory
+
+copyFile :: FilePath -> FilePath -> IO ()
+copyFile src dst = Posix.createLink src dst --Dir.copyFile (BS8.unpack src) (BS8.unpack dst)
+
+renameFile :: FilePath -> FilePath -> IO ()
+renameFile src dst = Posix.rename src dst
