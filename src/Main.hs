@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, RecordWildCards #-}
 module Main (main) where
 
+import qualified Buildsome.BuildMaps as BuildMaps
 import qualified Buildsome
 import           Buildsome (Buildsome, CollectStats(..), PutInputsInStats(..))
 import qualified Buildsome.Chart as Chart
@@ -309,7 +310,21 @@ main = do
   printer <- Printer.new render $ Printer.Id 0
   E.handle (ioErrorHandler printer) $
     handleOpts printer opts $
-    \db opt@Opt{..} requested finalMakefilePath makefile -> do
+    \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
       Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
-      Buildsome.with printer db finalMakefilePath makefile opt $ \buildsome ->
-        handleRequested buildsome printer requested
+      let buildMaps = BuildMaps.make makefile
+          checkEntry = do
+              path <- BS8.pack <$> getLine
+              let mTarget = BuildMaps.find buildMaps path
+              case mTarget of
+                  Nothing -> putStrLn ""
+                  Just (_targetKind, targetDesc) -> do
+                      let target = Makefile.tdTarget targetDesc
+                      case Makefile.targetCmds target of
+                          Left bs -> BS8.putStrLn bs
+                          Right _exprss -> error "what"
+          go = do
+              checkEntry
+              go
+
+      go
