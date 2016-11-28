@@ -154,9 +154,9 @@ parseMakefile printer _ origMakefilePath finalMakefilePath vars cwd = do
     Makefile.verifyPhonies makefile
     return makefile
   let msg = "Parsed makefile: "
-  Printer.rawPrintStrLn printer $ mconcat
-    [ msg, cPath (show origMakefilePath)
-    , " (took ", cTiming (show parseTime <> "sec"), ")"]
+  -- Printer.rawPrintStrLn printer $ mconcat
+  --   [ msg, cPath (show origMakefilePath)
+  --  , " (took ", cTiming (show parseTime <> "sec"), ")"]
   return makefile
   where
     Color.Scheme{..} = Color.scheme
@@ -311,10 +311,11 @@ main = do
   E.handle (ioErrorHandler printer) $
     handleOpts printer opts $
     \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
-      Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
+      --Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
       let buildMaps = BuildMaps.make makefile
           checkEntry = do
               path <- BS8.pack <$> getLine
+              IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
               let mTarget = BuildMaps.find buildMaps path
               case mTarget of
                   Nothing -> putStrLn ""
