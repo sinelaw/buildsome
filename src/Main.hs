@@ -16,7 +16,7 @@ import qualified Buildsome.Opts as Opts
 import qualified Buildsome.Print as Print
 import qualified BMake.User as BMake
 import qualified Control.Exception as E
-import           Control.Monad (forM_)
+import           Control.Monad (forM_, when)
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.Functor.Identity (Identity(..))
@@ -313,6 +313,11 @@ main = do
     \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
       --Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
       let buildMaps = BuildMaps.make makefile
+          writeField bs = do
+              let linesCount = length (BS8.split '\n' bs)
+              putStrLn $ show $ linesCount
+              when (linesCount > 0) $ BS8.putStrLn bs
+
           checkEntry = do
               path <- BS8.pack <$> getLine
               IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
@@ -322,10 +327,12 @@ main = do
                   Just (_targetKind, targetDesc) -> do
                       let target = Makefile.tdTarget targetDesc
                       case Makefile.targetCmds target of
-                          Left bs -> do
-                              putStrLn $ show $ length (BS8.split '\n' bs)
-                              BS8.putStrLn bs
+                          Left bs -> writeField bs
                           Right _exprss -> error "what"
+                      let inputs = BS8.intercalate "\n" (Makefile.targetInputs target)
+                          outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
+                      writeField inputs
+                      writeField outputs
           go = do
               checkEntry
               go
