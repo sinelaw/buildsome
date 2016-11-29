@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, RecordWildCards #-}
 module Main (main) where
@@ -15,7 +16,6 @@ import           Buildsome.Db (Db, Reason)
 import qualified Buildsome.Db as Db
 import           Buildsome.Opts (Opts(..), Opt(..))
 import qualified Buildsome.Opts as Opts
-import qualified Buildsome.Print as Print
 import qualified BMake.User as BMake
 import qualified Control.Exception as E
 import           Control.Monad (forM_, when)
@@ -49,7 +49,7 @@ import qualified System.IO.Error as Err
 import qualified System.Posix.ByteString as Posix
 import           System.Posix.IO (stdOutput)
 import           System.Posix.Terminal (queryTerminal)
-
+import qualified Data.Set as Set
 import qualified Prelude.Compat as Prelude
 import           Prelude.Compat hiding (FilePath, show)
 
@@ -303,6 +303,7 @@ ioErrorHandler printer err =
     where
         Color.Scheme{..} = Color.scheme
 
+cachedBuildMapFind :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO (Maybe (Makefile.TargetKind, Makefile.TargetDesc))
 cachedBuildMapFind syncMap buildMaps filePath = do
   mHashes <- SyncMap.lookup syncMap filePath
   case mHashes of
@@ -310,6 +311,54 @@ cachedBuildMapFind syncMap buildMaps filePath = do
       Just hashes -> return hashes
   where
       updateCache = return $ BuildMaps.find buildMaps filePath
+
+{-# INLINE andM #-}
+andM :: Monad m => (a -> m Bool) -> [a] -> m Bool
+andM check = go
+    where
+        go [] = return True
+        go (x:xs) =
+            do
+                res <- check x
+                if res
+                    then go xs
+                    else return False
+
+data FileBuildRule
+  = NoBuildRule
+  | PhonyBuildRule
+  | ValidBuildRule
+  | InvalidPatternBuildRule {- transitively missing inputs -}
+  deriving (Eq)
+
+-- getFileBuildRule :: BuildMaps -> Set FilePath -> Set FilePath -> FilePath -> IO FileBuildRule
+getFileBuildRule :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO FileBuildRule
+getFileBuildRule syncMap buildMaps = go
+  where
+    registeredOutputs = Set.empty :: Set.Set FilePath
+    phonies = Set.empty
+    go path
+      | path `Set.member` phonies = return PhonyBuildRule
+      | otherwise = cachedBuildMapFind syncMap buildMaps path >>= \res ->
+        case res of
+        Nothing -> return NoBuildRule
+        Just (BuildMaps.TargetSimple, _) -> return ValidBuildRule
+        Just (BuildMaps.TargetPattern, targetDesc) ->
+          do
+            inputsCanExist <- andM fileCanExist (Makefile.targetAllInputs (Makefile.tdTarget targetDesc))
+            return $
+              if inputsCanExist
+              then ValidBuildRule
+              else InvalidPatternBuildRule
+    fileCanExist path = do
+      fileBuildRule <- go path
+      case fileBuildRule of
+        InvalidPatternBuildRule -> return False
+        PhonyBuildRule -> return False
+        ValidBuildRule -> return True
+        NoBuildRule
+          | path `Set.member` registeredOutputs -> return False -- a has-been
+          | otherwise -> FilePath.exists path
 
 main :: IO ()
 main = do
@@ -333,18 +382,22 @@ main = do
           checkEntry = do
               path <- BS8.pack <$> getLine
               IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
-              mTarget <- cachedBuildMapFind syncMap buildMaps path
-              case mTarget of
-                  Nothing -> putStrLn "0"
-                  Just (_targetKind, targetDesc) -> do
-                      let target = Makefile.tdTarget targetDesc
-                      case Makefile.targetCmds target of
-                          Left bs -> writeField bs
-                          Right _exprss -> error "what"
-                      let inputs = BS8.intercalate "\n" (Makefile.targetInputs target)
-                          outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
-                      writeField inputs
-                      writeField outputs
+              buildRule <- getFileBuildRule syncMap buildMaps path
+              case buildRule of
+                  ValidBuildRule -> do
+                      mTarget <- cachedBuildMapFind syncMap buildMaps path
+                      case mTarget of
+                          Nothing -> putStrLn "0"
+                          Just (_targetKind, targetDesc) -> do
+                              let target = Makefile.tdTarget targetDesc
+                              case Makefile.targetCmds target of
+                                  Left bs -> writeField bs
+                                  Right _exprss -> error "what"
+                              let inputs = BS8.intercalate "\n" (Makefile.targetInputs target)
+                                  outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
+                              writeField inputs
+                              writeField outputs
+                  _ -> putStrLn "0"
           go = do
               checkEntry
               go
