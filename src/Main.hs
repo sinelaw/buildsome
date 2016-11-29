@@ -318,11 +318,13 @@ main = do
               IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
               let mTarget = BuildMaps.find buildMaps path
               case mTarget of
-                  Nothing -> putStrLn ""
+                  Nothing -> putStrLn "0"
                   Just (_targetKind, targetDesc) -> do
                       let target = Makefile.tdTarget targetDesc
                       case Makefile.targetCmds target of
-                          Left bs -> BS8.putStrLn bs
+                          Left bs -> do
+                              putStrLn $ show $ length (BS8.split '\n' bs)
+                              BS8.putStrLn bs
                           Right _exprss -> error "what"
           go = do
               checkEntry

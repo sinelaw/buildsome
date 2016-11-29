@@ -13,8 +13,8 @@ ${buildsome} -f dlopen
 ${buildsome} -f dlopen
 git clean -fdx -- dlopen
 
-ifs/test ${buildsome}
-git clean -fdx -- ifs
+# ifs/test ${buildsome}
+# git clean -fdx -- ifs
 
 ${buildsome} -f implicitpat
 ${buildsome} -f implicitpat
