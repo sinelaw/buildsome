@@ -8,6 +8,7 @@ module Buildsome
   , clean
   , BuiltTargets(..)
   , PutInputsInStats(..), CollectStats(..), want
+  , cachedBuildMapFind
   ) where
 
 

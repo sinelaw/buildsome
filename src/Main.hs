@@ -2,6 +2,8 @@
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, RecordWildCards #-}
 module Main (main) where
 
+import           Lib.SyncMap (SyncMap)
+import qualified Lib.SyncMap as SyncMap
 import qualified Buildsome.BuildMaps as BuildMaps
 import qualified Buildsome
 import           Buildsome (Buildsome, CollectStats(..), PutInputsInStats(..))
@@ -301,6 +303,14 @@ ioErrorHandler printer err =
     where
         Color.Scheme{..} = Color.scheme
 
+cachedBuildMapFind syncMap buildMaps filePath = do
+  mHashes <- SyncMap.lookup syncMap filePath
+  case mHashes of
+      Nothing -> SyncMap.insert syncMap filePath updateCache
+      Just hashes -> return hashes
+  where
+      updateCache = return $ BuildMaps.find buildMaps filePath
+
 main :: IO ()
 main = do
   setBuffering
@@ -308,6 +318,7 @@ main = do
   opts <- Opts.get
   render <- getColorRender opts
   printer <- Printer.new render $ Printer.Id 0
+  syncMap <- SyncMap.new
   E.handle (ioErrorHandler printer) $
     handleOpts printer opts $
     \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
@@ -315,13 +326,14 @@ main = do
       let buildMaps = BuildMaps.make makefile
           writeField bs = do
               let linesCount = length (BS8.split '\n' bs)
+              IO.hPutStrLn IO.stderr (show linesCount <> "\n" <> BS8.unpack bs)
               putStrLn $ show $ linesCount
               when (linesCount > 0) $ BS8.putStrLn bs
 
           checkEntry = do
               path <- BS8.pack <$> getLine
               IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
-              let mTarget = BuildMaps.find buildMaps path
+              mTarget <- cachedBuildMapFind syncMap buildMaps path
               case mTarget of
                   Nothing -> putStrLn "0"
                   Just (_targetKind, targetDesc) -> do
