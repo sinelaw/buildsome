@@ -7,6 +7,7 @@ module Lib.TimeIt
 import Control.Exception (evaluate)
 import Data.Time (getCurrentTime, diffUTCTime, NominalDiffTime)
 import System.IO.Unsafe
+import qualified System.IO as IO
 
 timeIt :: IO a -> IO (NominalDiffTime, a)
 timeIt act =
@@ -20,7 +21,7 @@ printTimeIt :: String -> IO a -> IO a
 printTimeIt msg act =
     do
         (t, res) <- timeIt act
-        putStrLn $ msg ++ " took " ++ show t
+        IO.hPutStrLn IO.stderr $ msg ++ " took " ++ show t
         return res
 
 pureTimeIt :: String -> a -> a

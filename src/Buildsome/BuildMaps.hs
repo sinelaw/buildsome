@@ -43,15 +43,15 @@ data BuildMaps = BuildMaps
   }
 
 find :: BuildMaps -> FilePath -> Maybe (TargetKind, TargetDesc)
-find (BuildMaps buildMap childrenMap) path = {-# SCC "find" #-}
+find (BuildMaps buildMap childrenMap) path =
   -- Allow specific/simple matches to override pattern matches
   ((,) TargetSimple <$> simpleMatch) `mplus`
   ((,) TargetPattern <$> patternMatch)
   where
-    simpleMatch = {-# SCC "simpleMatch" #-} (path `M.lookup` buildMap)
-    patterns = {-# SCC "find.patterns" #-} dbmPatterns $ M.findWithDefault mempty (takeDirectory path) childrenMap
-    instantiate pattern = {-# SCC "find.instantiate" #-} (,) pattern <$> Makefile.instantiatePatternByOutput path pattern
-    patternMatch = {-# SCC "find.patternMatch" #-}
+    simpleMatch = (path `M.lookup` buildMap)
+    patterns = dbmPatterns $ M.findWithDefault mempty (takeDirectory path) childrenMap
+    instantiate pattern = (,) pattern <$> Makefile.instantiatePatternByOutput path pattern
+    patternMatch =
       case mapMaybe instantiate patterns of
       [] -> Nothing
       [(_, target)] -> Just $ descOfTarget target

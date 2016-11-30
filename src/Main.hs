@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, RecordWildCards #-}
 module Main (main) where
 
+import           Lib.TimeIt (printTimeIt)
 import           Lib.SyncMap (SyncMap)
 import qualified Lib.SyncMap as SyncMap
 import qualified Buildsome.BuildMaps as BuildMaps
@@ -303,6 +304,12 @@ ioErrorHandler printer err =
     where
         Color.Scheme{..} = Color.scheme
 
+putStrLnStdErr :: String -> IO ()
+putStrLnStdErr = IO.hPutStrLn IO.stderr
+
+showLength :: (Show a) => a -> String
+showLength = show . (length :: String -> Int) . show
+
 cachedBuildMapFind :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO (Maybe (Makefile.TargetKind, Makefile.TargetDesc))
 cachedBuildMapFind syncMap buildMaps filePath = do
   mHashes <- SyncMap.lookup syncMap filePath
@@ -310,7 +317,13 @@ cachedBuildMapFind syncMap buildMaps filePath = do
       Nothing -> SyncMap.insert syncMap filePath updateCache
       Just hashes -> return hashes
   where
-      updateCache = return $ BuildMaps.find buildMaps filePath
+      updateCache = do
+          putStrLnStdErr (showLength $ filePath)
+          res <- printTimeIt "BuildMaps.find" $ do
+              let res' = BuildMaps.find buildMaps filePath
+              putStrLnStdErr (showLength $ res')
+              return res'
+          return res
 
 {-# INLINE andM #-}
 andM :: Monad m => (a -> m Bool) -> [a] -> m Bool
@@ -339,7 +352,7 @@ getFileBuildRule syncMap buildMaps = go
     phonies = Set.empty
     go path
       | path `Set.member` phonies = return PhonyBuildRule
-      | otherwise = cachedBuildMapFind syncMap buildMaps path >>= \res ->
+      | otherwise = (printTimeIt "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path) >>= \res ->
         case res of
         Nothing -> return NoBuildRule
         Just (BuildMaps.TargetSimple, _) -> return ValidBuildRule
@@ -358,7 +371,7 @@ getFileBuildRule syncMap buildMaps = go
         ValidBuildRule -> return True
         NoBuildRule
           | path `Set.member` registeredOutputs -> return False -- a has-been
-          | otherwise -> FilePath.exists path
+          | otherwise -> printTimeIt "FilePath.exists" $ FilePath.exists path
 
 main :: IO ()
 main = do
@@ -375,17 +388,17 @@ main = do
       let buildMaps = BuildMaps.make makefile
           writeField bs = do
               let linesCount = length (BS8.split '\n' bs)
-              IO.hPutStrLn IO.stderr (show linesCount <> "\n" <> BS8.unpack bs)
+              putStrLnStdErr (show linesCount <> "\n" <> BS8.unpack bs)
               putStrLn $ show $ linesCount
               when (linesCount > 0) $ BS8.putStrLn bs
 
           checkEntry = do
               path <- BS8.pack <$> getLine
-              IO.hPutStrLn IO.stderr ("(BUILDSOME) Query: '" <> BS8.unpack path <> "'")
-              buildRule <- getFileBuildRule syncMap buildMaps path
+              putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
+              buildRule <- printTimeIt "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
               case buildRule of
                   ValidBuildRule -> do
-                      mTarget <- cachedBuildMapFind syncMap buildMaps path
+                      mTarget <- printTimeIt "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
                       case mTarget of
                           Nothing -> putStrLn "0"
                           Just (_targetKind, targetDesc) -> do
@@ -398,8 +411,6 @@ main = do
                               writeField inputs
                               writeField outputs
                   _ -> putStrLn "0"
-          go = do
               checkEntry
-              go
 
-      go
+      checkEntry
