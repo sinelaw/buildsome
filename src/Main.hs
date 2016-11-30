@@ -317,13 +317,14 @@ cachedBuildMapFind syncMap buildMaps filePath = do
       Nothing -> SyncMap.insert syncMap filePath updateCache
       Just hashes -> return hashes
   where
-      updateCache = do
-          putStrLnStdErr (showLength $ filePath)
-          res <- printTimeIt "BuildMaps.find" $ do
-              let res' = BuildMaps.find buildMaps filePath
-              putStrLnStdErr (showLength $ res')
-              return res'
-          return res
+      updateCache = return $ BuildMaps.find buildMaps filePath
+      -- do
+      --     putStrLnStdErr (showLength $ filePath)
+      --     res <- printTimeIt "BuildMaps.find" $ do
+      --         let res' = BuildMaps.find buildMaps filePath
+      --         putStrLnStdErr (showLength $ res')
+      --         return res'
+      --     return res
 
 {-# INLINE andM #-}
 andM :: Monad m => (a -> m Bool) -> [a] -> m Bool
@@ -344,6 +345,8 @@ data FileBuildRule
   | InvalidPatternBuildRule {- transitively missing inputs -}
   deriving (Eq)
 
+ptime x y = y
+
 -- getFileBuildRule :: BuildMaps -> Set FilePath -> Set FilePath -> FilePath -> IO FileBuildRule
 getFileBuildRule :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO FileBuildRule
 getFileBuildRule syncMap buildMaps = go
@@ -352,7 +355,7 @@ getFileBuildRule syncMap buildMaps = go
     phonies = Set.empty
     go path
       | path `Set.member` phonies = return PhonyBuildRule
-      | otherwise = (printTimeIt "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path) >>= \res ->
+      | otherwise = (ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path) >>= \res ->
         case res of
         Nothing -> return NoBuildRule
         Just (BuildMaps.TargetSimple, _) -> return ValidBuildRule
@@ -371,7 +374,7 @@ getFileBuildRule syncMap buildMaps = go
         ValidBuildRule -> return True
         NoBuildRule
           | path `Set.member` registeredOutputs -> return False -- a has-been
-          | otherwise -> printTimeIt "FilePath.exists" $ FilePath.exists path
+          | otherwise -> ptime "FilePath.exists" $ FilePath.exists path
 
 main :: IO ()
 main = do
@@ -395,10 +398,10 @@ main = do
           checkEntry = do
               path <- BS8.pack <$> getLine
               putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
-              buildRule <- printTimeIt "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
+              buildRule <- ptime "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
               case buildRule of
                   ValidBuildRule -> do
-                      mTarget <- printTimeIt "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
+                      mTarget <- ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
                       case mTarget of
                           Nothing -> putStrLn "0"
                           Just (_targetKind, targetDesc) -> do
