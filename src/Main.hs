@@ -376,6 +376,38 @@ getFileBuildRule syncMap buildMaps = go
           | path `Set.member` registeredOutputs -> return False -- a has-been
           | otherwise -> ptime "FilePath.exists" $ FilePath.exists path
 
+
+writeField :: ByteString -> IO ()
+writeField bs = do
+    let linesCount = length (BS8.split '\n' bs)
+    putStrLnStdErr (show linesCount <> "\n" <> BS8.unpack bs)
+    putStrLn $ show $ linesCount
+    when (linesCount > 0) $ BS8.putStrLn bs
+
+checkEntry :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> IO ()
+checkEntry syncMap buildMaps  = do
+    let go = do
+            path <- BS8.pack <$> getLine
+            putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
+            buildRule <- ptime "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
+            case buildRule of
+                ValidBuildRule -> do
+                    mTarget <- ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
+                    case mTarget of
+                        Nothing -> putStrLn "0"
+                        Just (_targetKind, targetDesc) -> do
+                            let target = Makefile.tdTarget targetDesc
+                            case Makefile.targetCmds target of
+                                Left bs -> writeField bs
+                                Right _exprss -> error "what"
+                            let inputs = BS8.intercalate "\n" (Makefile.targetInputs target)
+                                outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
+                            writeField inputs
+                            writeField outputs
+                _ -> putStrLn "0"
+            go
+    go
+
 main :: IO ()
 main = do
   setBuffering
@@ -389,31 +421,4 @@ main = do
     \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
       --Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
       let buildMaps = BuildMaps.make makefile
-          writeField bs = do
-              let linesCount = length (BS8.split '\n' bs)
-              putStrLnStdErr (show linesCount <> "\n" <> BS8.unpack bs)
-              putStrLn $ show $ linesCount
-              when (linesCount > 0) $ BS8.putStrLn bs
-
-          checkEntry = do
-              path <- BS8.pack <$> getLine
-              putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
-              buildRule <- ptime "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
-              case buildRule of
-                  ValidBuildRule -> do
-                      mTarget <- ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
-                      case mTarget of
-                          Nothing -> putStrLn "0"
-                          Just (_targetKind, targetDesc) -> do
-                              let target = Makefile.tdTarget targetDesc
-                              case Makefile.targetCmds target of
-                                  Left bs -> writeField bs
-                                  Right _exprss -> error "what"
-                              let inputs = BS8.intercalate "\n" (Makefile.targetInputs target)
-                                  outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
-                              writeField inputs
-                              writeField outputs
-                  _ -> putStrLn "0"
-              checkEntry
-
-      checkEntry
+      checkEntry syncMap buildMaps
