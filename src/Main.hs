@@ -394,7 +394,7 @@ checkEntry syncMap buildMaps  = do
                 ValidBuildRule -> do
                     mTarget <- ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
                     case mTarget of
-                        Nothing -> putStrLn "0"
+                        Nothing -> writeField ""
                         Just (_targetKind, targetDesc) -> do
                             let target = Makefile.tdTarget targetDesc
                             case Makefile.targetCmds target of
@@ -404,7 +404,7 @@ checkEntry syncMap buildMaps  = do
                                 outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
                             writeField inputs
                             writeField outputs
-                _ -> putStrLn "0"
+                _ -> writeField ""
             go
     go
 
