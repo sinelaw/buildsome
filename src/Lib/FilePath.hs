@@ -60,14 +60,16 @@ splitFileName = onFst joinPath . f . splitPath
     f [x] = ([], x)
     f (x:xs) = onFst (x:) $ f xs
 
+dirAndFile :: FilePath -> (FilePath, FilePath)
+dirAndFile path = case BS8.elemIndexEnd '/' path of
+    Nothing -> ("", path)
+    Just i -> BS8.splitAt i path
+
 takeDirectory :: FilePath -> FilePath
-takeDirectory = joinPath . reverse . drop 1 . reverse . splitPath
+takeDirectory = fst . dirAndFile
 
 takeFileName :: FilePath -> FilePath
-takeFileName path =
-  case splitPath path of
-  [] -> ""
-  xs -> last xs
+takeFileName = snd . dirAndFile
 
 removeRedundantComponents :: FilePath -> FilePath
 removeRedundantComponents =
