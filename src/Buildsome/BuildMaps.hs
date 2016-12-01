@@ -15,8 +15,8 @@ import qualified Buildsome.Print as Print
 import           Control.Monad
 import qualified Data.ByteString.Char8 as BS8
 import           Data.List (nub)
-import           Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
+import           Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as M
 import           Data.Maybe (mapMaybe)
 import           Data.Monoid ((<>))
 import           Lib.FilePath (FilePath, takeDirectory)
