@@ -380,21 +380,26 @@ getFileBuildRule syncMap buildMaps = go
 writeField :: ByteString -> IO ()
 writeField bs = do
     let linesCount = length (BS8.split '\n' bs)
-    putStrLnStdErr (show linesCount <> "\n" <> BS8.unpack bs)
+    -- putStrLnStdErr (show linesCount <> "\n" <> BS8.unpack bs)
     putStrLn $ show $ linesCount
     when (linesCount > 0) $ BS8.putStrLn bs
+
+writeEmptyEntry = do
+    writeField ""
+    writeField ""
+    writeField ""
 
 checkEntry :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> IO ()
 checkEntry syncMap buildMaps  = do
     let go = do
             path <- BS8.pack <$> getLine
-            putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
+            -- putStrLnStdErr (BS8.unpack $ "(BUILDSOME) Query: '" <> path <> "'")
             buildRule <- ptime "getFileBuildRule" $ getFileBuildRule syncMap buildMaps path
             case buildRule of
                 ValidBuildRule -> do
                     mTarget <- ptime "cachedBuildMapFind" $ cachedBuildMapFind syncMap buildMaps path
                     case mTarget of
-                        Nothing -> writeField ""
+                        Nothing -> writeEmptyEntry
                         Just (_targetKind, targetDesc) -> do
                             let target = Makefile.tdTarget targetDesc
                             case Makefile.targetCmds target of
@@ -404,7 +409,7 @@ checkEntry syncMap buildMaps  = do
                                 outputs = BS8.intercalate "\n" (Makefile.targetOutputs target)
                             writeField inputs
                             writeField outputs
-                _ -> writeField ""
+                _ -> writeEmptyEntry
             go
     go
 
