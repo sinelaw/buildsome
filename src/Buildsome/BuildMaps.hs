@@ -95,6 +95,4 @@ make makefile = BuildMaps buildMap childrenMap
       error $ "Overlapping output paths for: " ++ show path ++ " at:\n" ++
       show (targetPos a) ++ "vs.\n" ++ show (targetPos b)
     buildMap =
-      M.fromListWithKey overlappingOutputs
-      [ (outputPath, targetDesc)
-      | (outputPath, targetDesc) <- outputs ]
+      M.fromListWithKey overlappingOutputs outputs
