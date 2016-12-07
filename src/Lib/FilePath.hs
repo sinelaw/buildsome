@@ -63,7 +63,9 @@ splitFileName = onFst joinPath . f . splitPath
 dirAndFile :: FilePath -> (FilePath, FilePath)
 dirAndFile path = case BS8.elemIndexEnd '/' path of
     Nothing -> ("", path)
-    Just i -> BS8.splitAt i path
+    Just i ->
+        let (dir, ffile) = BS8.splitAt (i) path
+        in (dir, BS8.tail ffile)
 
 takeDirectory :: FilePath -> FilePath
 takeDirectory = fst . dirAndFile
