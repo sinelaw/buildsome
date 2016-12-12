@@ -3,33 +3,12 @@
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, RecordWildCards #-}
 module Main (main) where
 
-import           Lib.TimeIt (printTimeIt)
-import           Lib.SyncMap (SyncMap)
-import qualified Lib.SyncMap as SyncMap
 import qualified Buildsome.BuildMaps as BuildMaps
-import qualified Buildsome
-import           Buildsome (Buildsome, CollectStats(..), PutInputsInStats(..))
-import qualified Buildsome.Chart as Chart
-import qualified Buildsome.ClangCommands as ClangCommands
 import qualified Buildsome.Color as Color
-import qualified Buildsome.CompatMakefile as CompatMakefile
-import           Buildsome.Db (Db, Reason)
-import qualified Buildsome.Db as Db
 import           Buildsome.Opts (Opts(..), Opt(..))
 import qualified Buildsome.Opts as Opts
-import qualified BMake.User as BMake
-import qualified Control.Exception as E
-import           Control.Monad (forM_, when)
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as BS8
-import           Data.Functor.Identity (Identity(..))
-import           Data.List (foldl')
-import qualified Data.Map as M
-import           Data.Maybe (mapMaybe, isJust)
-import           Data.Monoid
-import           Data.String (IsString(..))
-import           Data.Typeable (Typeable)
-import           GHC.Conc (setNumCapabilities, getNumProcessors)
+import           Lib.SyncMap (SyncMap)
+import qualified Lib.SyncMap as SyncMap
 import           Lib.ByteString (unprefixed)
 import           Lib.ColorText (ColorText)
 import qualified Lib.ColorText as ColorText
@@ -44,6 +23,20 @@ import           Lib.ScanFileUpwards (scanFileUpwards)
 import           Lib.Show (show)
 import           Lib.TimeIt (timeIt)
 import qualified Lib.Version as Version
+
+import qualified BMake.User as BMake
+import qualified Control.Exception as E
+import           Control.Monad (forM_, when)
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as BS8
+import           Data.Functor.Identity (Identity(..))
+import           Data.List (foldl')
+import qualified Data.Map as M
+import           Data.Maybe (mapMaybe)
+import           Data.Monoid
+import           Data.String (IsString(..))
+import           Data.Typeable (Typeable)
+import           GHC.Conc (setNumCapabilities, getNumProcessors)
 import           System.Exit (exitWith, ExitCode(..))
 import qualified System.IO as IO
 import qualified System.IO.Error as Err
@@ -82,52 +75,11 @@ specifiedMakefile printer path = do
       | Posix.isDirectory stat -> return $ path </> standardMakeFilename
       | otherwise -> return path
 
-data TargetsRequest = TargetsRequest
-  { targetsRequestPaths :: [FilePath]
-  , targetsRequestReason :: Reason
-  , targetsRequestExtraOutputs :: Opts.ExtraOutputs
-  }
-
-ntraverseTargetsRequest ::
-  Applicative f =>
-  ([FilePath] -> f [FilePath]) ->
-  (Reason -> f Reason) ->
-  (Opts.ExtraOutputs -> f Opts.ExtraOutputs) ->
-  TargetsRequest -> f TargetsRequest
-ntraverseTargetsRequest
-  onTargetPaths onReason onExtraOutputs
-  (TargetsRequest paths reason extraOutputs)
-  = TargetsRequest <$> onTargetPaths paths <*> onReason reason <*> onExtraOutputs extraOutputs
-
-data Requested = RequestedClean | RequestedTargets TargetsRequest
-
-traverseRequested ::
-  Applicative f => (TargetsRequest -> f TargetsRequest) -> Requested -> f Requested
-traverseRequested _ RequestedClean = pure RequestedClean
-traverseRequested f (RequestedTargets x) = RequestedTargets <$> f x
-
 data BadCommandLine = BadCommandLine (ColorText -> ByteString) String deriving (Typeable)
 instance E.Exception BadCommandLine
 instance Show BadCommandLine where
   show (BadCommandLine render msg) =
     errorShowConcat render ["Invalid command line options: ", fromString msg]
-
-getRequestedTargets :: Printer -> Opts.ExtraOutputs -> [ByteString] -> IO Requested
-getRequestedTargets _ _ ["clean"] = return RequestedClean
-getRequestedTargets printer extraOutputs ts
-  | "clean" `elem` ts =
-    E.throwIO $
-    BadCommandLine (Printer.render printer) "Clean must be requested exclusively"
-  | otherwise =
-    return $ RequestedTargets TargetsRequest
-      { targetsRequestPaths = requestPaths
-      , targetsRequestReason = reason
-      , targetsRequestExtraOutputs = extraOutputs
-      }
-  where
-    (requestPaths, reason) = case ts of
-      [] -> (["default"], Db.BecauseRequested "implicit 'default' target")
-      _ -> (ts, Db.BecauseRequested "explicit request from cmdline")
 
 setBuffering :: IO ()
 setBuffering = do
@@ -148,15 +100,15 @@ switchDirectory makefilePath = do
   where
     (cwd, file) = FilePath.splitFileName makefilePath
 
-parseMakefile :: Printer -> Db -> FilePath -> FilePath -> Makefile.Vars -> FilePath -> IO Makefile
-parseMakefile printer _ origMakefilePath finalMakefilePath vars cwd = do
+parseMakefile :: Printer -> FilePath -> FilePath -> Makefile.Vars -> FilePath -> IO Makefile
+parseMakefile printer origMakefilePath finalMakefilePath vars cwd = do
   let absFinalMakefilePath = cwd </> finalMakefilePath
   (parseTime,  makefile) <- timeIt $ do
     rawMakefile <- BMake.parse absFinalMakefilePath vars
     let makefile = runIdentity $ Makefile.onMakefilePaths (Identity . FilePath.canonicalizePathAsRelativeCwd cwd) rawMakefile
     Makefile.verifyPhonies makefile
     return makefile
-  let msg = "Parsed makefile: "
+  -- let msg = "Parsed makefile: "
   -- Printer.rawPrintStrLn printer $ mconcat
   --   [ msg, cPath (show origMakefilePath)
   --  , " (took ", cTiming (show parseTime <> "sec"), ")"]
@@ -229,8 +181,7 @@ verifyValidFlags validFlags userFlags
     invalidUserFlags = filter (`M.notMember` validFlags) userFlags
 
 handleOpts ::
-  Printer -> Opts ->
-  (Db -> Opt -> Requested -> FilePath -> Makefile -> IO ()) -> IO ()
+  Printer -> Opts -> (Makefile -> IO ()) -> IO ()
 handleOpts printer GetVersion _ =
   Printer.rawPrintStrLn printer $ "buildsome " <> Version.version
 handleOpts printer (Opts opt) body = do
@@ -240,59 +191,15 @@ handleOpts printer (Opts opt) body = do
       maybe (E.throwIO (MakefileScanFailed (Printer.render printer))) return =<<
       scanFileUpwards standardMakeFilename
     Just path -> specifiedMakefile printer path
-  (origCwd, finalMakefilePath, cwd) <- switchDirectory origMakefilePath
-  let canonCwd =
-        FilePath.canonicalizePathAsRelativeCwd cwd
-      inOrigCwd = canonCwd . (origCwd </>)
-      targetInOrigCwd = canonCwd .
-        case optMakefilePath opt of
-        -- If we found the makefile by scanning upwards, prepend
-        -- original cwd to avoid losing it:
-        Nothing -> (origCwd </>)
-        -- Otherwise: there's no useful original cwd:
-        Just _ -> id
-  rawRequested <-
-    getRequestedTargets printer (optExtraOutputs opt) (optRequestedTargets opt)
-  requested <-
-    traverseRequested
-    (ntraverseTargetsRequest
-     (pure . map targetInOrigCwd) -- <- on target paths
-     pure                   -- <- on reason
-     (Opts.extraOutputsAtFilePaths (pure . inOrigCwd)) -- <- onExtraOutputs
-    ) rawRequested
-  Buildsome.withDb finalMakefilePath $ \db -> do
-    makefile <-
-      parseMakefile printer db origMakefilePath finalMakefilePath (optVars opt) cwd
-    let flags = flagsOfVars (Makefile.makefileWeakVars makefile)
-    if optHelpFlags opt
-      then showHelpFlags flags
-      else do
-        verifyValidFlags flags (optWiths opt ++ optWithouts opt)
-        body db opt requested finalMakefilePath makefile
+  (_origCwd, finalMakefilePath, cwd) <- switchDirectory origMakefilePath
+  makefile <- parseMakefile printer origMakefilePath finalMakefilePath (optVars opt) cwd
+  let flags = flagsOfVars (Makefile.makefileWeakVars makefile)
+  if optHelpFlags opt
+    then showHelpFlags flags
+    else do
+      verifyValidFlags flags (optWiths opt ++ optWithouts opt)
+      body makefile
 
-handleRequested :: Buildsome -> Printer -> Requested -> IO ()
-handleRequested buildsome printer RequestedClean = Buildsome.clean printer buildsome
-handleRequested
-  buildsome printer
-  (RequestedTargets
-   (TargetsRequest requestedTargetPaths reason
-    (Opts.ExtraOutputs mChartPath mClangCommandsPath compatMakefile)))
-  = do
-      Buildsome.BuiltTargets rootTargets slaveStats <-
-        Buildsome.want printer buildsome collectStats reason requestedTargetPaths
-      maybe (return ()) (Chart.make slaveStats) mChartPath
-      cwd <- Posix.getWorkingDirectory
-      maybe (return ()) (ClangCommands.make cwd slaveStats rootTargets) mClangCommandsPath
-      whenCompat $
-        CompatMakefile.make (Buildsome.bsPhoniesSet buildsome) cwd slaveStats rootTargets "compat-makefile"
-  where
-    (collectStats, whenCompat) =
-      case compatMakefile of
-      Opts.CompatMakefile -> (CollectStats PutInputsInStats, id :: IO a -> IO a)
-      Opts.NoCompatMakefile
-          | isJust mChartPath || isJust mClangCommandsPath
-            -> (CollectStats Don'tPutInputsInStats, const (return ()))
-          | otherwise -> (Don'tCollectStats, const (return ()))
 
 -- Includes "fail" and "error" (i.e: userError is part of IOError)
 -- Other error types are trusted to do their own color pretty-printing
@@ -303,12 +210,6 @@ ioErrorHandler printer err =
         exitWith (ExitFailure 1)
     where
         Color.Scheme{..} = Color.scheme
-
-putStrLnStdErr :: String -> IO ()
-putStrLnStdErr = IO.hPutStrLn IO.stderr
-
-showLength :: (Show a) => a -> String
-showLength = show . (length :: String -> Int) . show
 
 cachedBuildMapFind :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO (Maybe (Makefile.TargetKind, Makefile.TargetDesc))
 cachedBuildMapFind syncMap buildMaps filePath = do
@@ -345,7 +246,8 @@ data FileBuildRule
   | InvalidPatternBuildRule {- transitively missing inputs -}
   deriving (Eq)
 
-ptime x y = y
+ptime :: t -> t1 -> t1
+ptime _ y = y
 
 -- getFileBuildRule :: BuildMaps -> Set FilePath -> Set FilePath -> FilePath -> IO FileBuildRule
 getFileBuildRule :: SyncMap FilePath (Maybe (Makefile.TargetKind, Makefile.TargetDesc)) -> BuildMaps.BuildMaps -> FilePath -> IO FileBuildRule
@@ -384,6 +286,7 @@ writeField bs = do
     putStrLn $ show $ linesCount
     when (linesCount > 0) $ BS8.putStrLn bs
 
+writeEmptyEntry :: IO ()
 writeEmptyEntry = do
     writeField ""
     writeField ""
@@ -423,7 +326,7 @@ main = do
   syncMap <- SyncMap.new
   E.handle (ioErrorHandler printer) $
     handleOpts printer opts $
-    \_db _opt@Opt{..} _requested _finalMakefilePath makefile -> do
+    \makefile -> do
       --Print.buildsomeCreation printer Version.version optWiths optWithouts optVerbosity
       let buildMaps = BuildMaps.make makefile
       checkEntry syncMap buildMaps

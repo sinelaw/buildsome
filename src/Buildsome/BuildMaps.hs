@@ -11,7 +11,6 @@ module Buildsome.BuildMaps
   , findDirectory
   ) where
 
-import qualified Buildsome.Print as Print
 import           Control.Monad
 import qualified Data.ByteString.Char8 as BS8
 import           Data.List (nub)
@@ -19,13 +18,16 @@ import           Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as M
 import           Data.Maybe (mapMaybe)
 import           Data.Monoid ((<>))
+import           Data.String (IsString(..))
 import           Lib.FilePath (FilePath, takeDirectory)
 import           Lib.Makefile (Makefile(..), TargetType(..), Pattern
                               , TargetRep(..), TargetDesc(..), descOfTarget, computeTargetRep
                               , TargetKind(..))
 import qualified Lib.Makefile as Makefile
 import qualified Lib.StringPattern as StringPattern
+import           Lib.Parsec (showPos)
 
+import           Text.Parsec (SourcePos)
 import           Prelude.Compat hiding (FilePath)
 
 data DirectoryBuildMap = DirectoryBuildMap
@@ -41,6 +43,9 @@ data BuildMaps = BuildMaps
   { _bmBuildMap :: Map FilePath TargetDesc -- output paths -> min(representative) path and original spec
   , _bmChildrenMap :: Map FilePath DirectoryBuildMap
   }
+
+posText :: (Monoid s, IsString s) => SourcePos -> s
+posText pos = mconcat [fromString (showPos pos), ": "]
 
 find :: BuildMaps -> FilePath -> Maybe (TargetKind, TargetDesc)
 find (BuildMaps buildMap childrenMap) path =
@@ -62,7 +67,7 @@ find (BuildMaps buildMap childrenMap) path =
           map (showPattern . fst) targets
         ]
     showPattern pattern =
-      Print.posText (targetPos pattern) <> showPatternOutputs pattern
+      posText (targetPos pattern) <> showPatternOutputs pattern
     showPatternOutputs pattern =
       BS8.unwords $
       map (StringPattern.toString . Makefile.filePatternFile) $
