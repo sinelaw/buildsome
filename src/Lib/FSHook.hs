@@ -162,19 +162,21 @@ serve printer fsHook conn = do
               , ") received new connections after formal completion!"]
 
 -- Except thread killed
-printRethrowExceptions :: String -> IO a -> IO a
-printRethrowExceptions msg =
+printRethrowExceptions :: ThreadId -> [Char] -> IO () -> IO ()
+printRethrowExceptions tid msg =
   E.handle $ \e -> do
     case E.fromException e of
-      Just E.ThreadKilled -> return ()
-      _ -> E.uninterruptibleMask_ $ hPutStrLn stderr $ msg ++ show (e :: E.SomeException)
-    E.throwIO e
+      Just E.ThreadKilled -> E.throwIO e
+      _ -> do
+          E.uninterruptibleMask_ $ hPutStrLn stderr $ msg ++ show (e :: E.SomeException)
+          E.throwTo tid e
 
 with :: Printer -> FilePath -> (FSHook -> IO a) -> IO a
 with printer ldPreloadPath body = do
   pid <- Posix.getProcessID
   freshJobIds <- Fresh.new 0
   let serverFilename = "/tmp/fshook-" <> BS8.pack (show pid)
+  tid <- myThreadId
   withUnixStreamListener serverFilename $ \listener -> do
     runningJobsRef <- newIORef M.empty
     let
@@ -187,13 +189,13 @@ with printer ldPreloadPath body = do
         }
     AsyncContext.new $ \ctx -> do
       _ <-
-        AsyncContext.spawn ctx $ printRethrowExceptions "BUG: Listener loop threw exception: " $ forever $
+        AsyncContext.spawn ctx $ printRethrowExceptions tid "BUG: Listener loop threw exception: " $ forever $
         do
           (conn, _srcAddr) <- Sock.accept listener
           AsyncContext.spawn ctx $
             -- Job connection may fail when the process is killed
             -- during a send-message, which may cause a protocol error
-            printRethrowExceptions "Job connection failed: " $
+            printRethrowExceptions tid "Job connection failed: " $
             serve printer fsHook conn
             `finally` Sock.close conn
       body fsHook
