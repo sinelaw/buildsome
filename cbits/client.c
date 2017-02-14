@@ -112,11 +112,11 @@ bool await_go(void)
 bool client__send_hooked(bool is_delayed, const char *buf, size_t size)
 {
     int fd = connection();
-    if(-1 == fd) return false;
+    ASSERT(0 <= fd);
 
-    if(!send_size(fd, sizeof(is_delayed)+size)) return false;
-    if(!send_all(fd, PS(is_delayed))) return false;
-    if(!send_all(fd, buf, size)) return false;
+    ASSERT(send_size(fd, sizeof(is_delayed)+size));
+    ASSERT(send_all(fd, PS(is_delayed)));
+    ASSERT(send_all(fd, buf, size));
 
     return true;
 }
