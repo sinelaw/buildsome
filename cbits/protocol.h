@@ -32,7 +32,8 @@ enum func {
     func_realpath  = 0x10014,
 
     /* Send a debug message */
-    func_trace     = 0xF0000
+    func_trace     = 0xF0000,
+    func_bye       = 0xF0001,
 };
 
 /* func_openw.flags */
@@ -85,5 +86,6 @@ struct func_exec      {in_path path;};
 struct func_execp     {char file[MAX_EXEC_FILE]; char cwd[MAX_PATH]; char env_var_PATH[MAX_PATH_ENV_VAR_LENGTH]; char conf_str_CS_PATH[MAX_PATH_CONF_STR];};
 struct func_realpath  {in_path path;};
 struct func_trace     {enum severity severity; char msg[1024];};
+struct func_bye       {};
 
 #endif

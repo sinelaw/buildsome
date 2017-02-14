@@ -15,10 +15,11 @@
 
 #include <errno.h>
 
+static void bye(void);
 static void vtrace(enum severity, const char *fmt, va_list);
 static void trace(enum severity, const char *fmt, ...);
 
-#define TRACE_DEBUG(...)   // TRACE(severity_debug, __VA_ARGS__)
+#define TRACE_DEBUG(...)   trace(severity_debug, __VA_ARGS__)
 #define TRACE_WARNING(...) trace(severity_warning, __VA_ARGS__)
 #define TRACE_ERROR(...)   trace(severity_error, __VA_ARGS__)
 
@@ -68,7 +69,7 @@ static void initialize_process_state(void)
 static void send_connection_await(const char *buf, size_t size, bool is_delayed)
 {
     if(!client__send_hooked(is_delayed, buf, size)) return;
-    if(!is_delayed) return;
+    /* if(!is_delayed) return; */
     bool res ATTR_UNUSED = await_go();
 }
 
@@ -157,6 +158,7 @@ static bool try_chop_common_root(unsigned prefix_length, char *prefix, char *can
         if(!_is_delayed) {                                              \
             do out_report_code while(0);                                \
             bool ATTR_UNUSED res = client__send_hooked(false, PS(msg)); \
+            bool res2 ATTR_UNUSED = await_go();                         \
             /* Can't stop me now, effect already happened, so just ignore */ \
             /* server-side rejects after-the-fact. */                   \
         }                                                               \
@@ -246,6 +248,17 @@ DEFINE_WRAPPER(ssize_t, readlink, (const char *path, char *buf, size_t bufsiz))
     DEFINE_MSG(msg, readlink);
     IN_PATH_COPY(needs_await, msg.args.path, path);
     return AWAIT_CALL_REAL(needs_await, msg, readlink, path, buf, bufsiz);
+}
+
+typedef void (*exit_func)(int);
+
+void exit(int status)
+{
+    bye();
+    static exit_func real_exit = NULL;
+    if (!real_exit) real_exit = dlsym(RTLD_NEXT, "exit");
+    real_exit(status);
+    abort();
 }
 
 static bool dereference_dir(int dirfd, char *buf, size_t buf_len) ATTR_WARN_UNUSED_RESULT;
@@ -574,6 +587,7 @@ int execv(const char *path, char *const argv[])
     return execve(path, argv, environ);
 }
 
+
 /* The following exec* functions that do not have "v" in their name
  * aren't hooks, but translators to the va_list interface which is
  * hooked. If we let this translation happen within libc we won't be
@@ -847,6 +861,15 @@ DEFINE_WRAPPER(char *, realpath, (const char *path, char *resolved_path))
 
 /*************************************/
 
+static void bye(void)
+{
+    initialize_process_state();
+    DEFINE_MSG(msg, bye);
+    const bool success __attribute__((unused)) =
+        client__send_hooked(false, PS(msg));
+    bool res ATTR_UNUSED = await_go();
+}
+
 static void vtrace(enum severity sev, const char *fmt, va_list args)
 {
     initialize_process_state();
@@ -855,6 +878,7 @@ static void vtrace(enum severity sev, const char *fmt, va_list args)
     vsnprintf(PS(msg.args.msg), fmt, args);
     const bool success __attribute__((unused)) =
         client__send_hooked(false, PS(msg));
+    bool res ATTR_UNUSED = await_go();
 }
 
 static void trace(enum severity sev, const char *fmt, ...)

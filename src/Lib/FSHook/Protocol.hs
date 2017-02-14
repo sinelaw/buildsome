@@ -103,6 +103,7 @@ data Func
   | ExecP (Maybe FilePath) [FilePath]{-prior searched paths (that did not exist)-}
   | RealPath InFilePath
   | Trace Severity ByteString
+  | Goodbye
   deriving (Show, Generic)
 
 instance Binary Func
@@ -112,11 +113,13 @@ data IsDelayed = Delayed | NotDelayed
 
 data Msg = Msg
   { msgIsDelayed :: IsDelayed
+  , msgCounter :: Word32
   , msgFunc :: Func
   }
 
 {-# INLINE showFunc #-}
 showFunc :: Func -> String
+showFunc (Goodbye) = "bye"
 showFunc (OpenR path) = "open:" ++ show path
 showFunc (OpenW path wmode creation trunc) = "openW" ++ showOpenWriteMode wmode ++ ":" ++ show path ++ showCreationMode creation ++ showOpenTruncateMode trunc
 showFunc (Stat path) = "stat:" ++ show path
@@ -234,21 +237,23 @@ funcs =
   , (0x10013, ("execp"   , execP <$> getNullTerminated mAX_EXEC_FILE <*> getPath <*> getNullTerminated mAX_PATH_ENV_VAR_LENGTH <*> getNullTerminated mAX_PATH_CONF_STR))
   , (0x10014, ("realPath", return <$> (RealPath <$> getInPath)))
   , (0xF0000, ("trace"   , return <$> (Trace <$> getSeverity <*> getNullTerminated 1024)))
+  , (0xF0001, ("bye"     , return <$> (return Goodbye)))
   ]
 
 {-# INLINE parseMsgLazy #-}
 parseMsgLazy :: BSL.ByteString -> IO Msg
 parseMsgLazy bs =
-  Msg isDelayed <$> mkFunc
+  Msg isDelayed counter <$> mkFunc
   where
-    (isDelayed, mkFunc) = (`runGet` bs) $ do
+    (isDelayed, counter, mkFunc) = (`runGet` bs) $ do
       isDelayedInt <- getWord8
+      counterInt <- getWord32le
       funcId <- getWord32le
       let (_name, getter) = funcs ! fromIntegral funcId
       ioFunc <- getter
       finished <- isEmpty
       unless finished $ fail "Unexpected trailing input in message"
-      return (if isDelayedInt == 0 then NotDelayed else Delayed, ioFunc)
+      return (if isDelayedInt == 0 then NotDelayed else Delayed, counterInt, ioFunc)
 
 {-# INLINE strictToLazy #-}
 strictToLazy :: ByteString -> BSL.ByteString

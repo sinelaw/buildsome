@@ -21,6 +21,8 @@ import           Control.Concurrent.MVar
 import qualified Control.Exception as E
 import           Control.Monad (forever, void, unless, (<=<))
 import           Data.Binary (Binary(..))
+import           Data.Binary.Put (runPut, putWord32le)
+import qualified Data.ByteString.Lazy as LBS
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
 import           Data.IORef
@@ -30,6 +32,7 @@ import           Data.Maybe (maybeToList)
 import           Data.Monoid ((<>))
 import           Data.Time (NominalDiffTime)
 import           Data.Typeable (Typeable)
+import           Data.Word (Word32)
 import           GHC.Generics (Generic(..))
 import           Lib.Argv0 (getArgv0)
 import qualified Lib.AsyncContext as AsyncContext
@@ -201,12 +204,12 @@ with printer ldPreloadPath body = do
       body fsHook
 
 {-# INLINE sendGo #-}
-sendGo :: Socket -> IO ()
-sendGo conn = void $ SockBS.send conn (BS8.pack "GO")
+sendGo :: Word32 -> Socket -> IO ()
+sendGo counter conn = void $ SockBS.send conn (BS8.pack "GO" <> (LBS.toStrict $ runPut $ putWord32le counter))
 
 {-# INLINE handleJobMsg #-}
-handleJobMsg :: String -> Socket -> RunningJob -> Protocol.Msg -> IO ()
-handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
+handleJobMsg :: String -> Socket -> RunningJob -> Protocol.Msg -> IO Bool
+handleJobMsg _tidStr conn job (Protocol.Msg isDelayed counter func) =
   case func of
     -- TODO: If any of these outputs are NOT also mode-only inputs on
     -- their file paths, don't use handleOutputs so that we don't
@@ -252,12 +255,14 @@ handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
       map (Input AccessTypeFull) (maybeToList mPath) ++
       map (Input AccessTypeModeOnly) attempted
     Protocol.RealPath path         -> handleInput AccessTypeModeOnly path
-    Protocol.Trace severity msg    -> traceHandler handlers severity msg
+    Protocol.Trace severity msg    -> wrap $ traceHandler handlers severity msg
+    Protocol.Goodbye               -> wrapVal False $ return ()
   where
     handlers = jobFSAccessHandlers job
     handleDelayed   inputs outputs = wrap $ delayedFSAccessHandler handlers actDesc inputs outputs
     handleUndelayed inputs outputs = wrap $ undelayedFSAccessHandler handlers actDesc inputs outputs
-    wrap = wrapHandler job conn isDelayed
+    wrapVal val x = wrapHandler job conn isDelayed counter x >> return val
+    wrap = wrapVal True
     actDesc = AccessDocEmpty -- TODO: AccessDoc func $ jobLabel job
     handleInput accessType path = handleInputs [Input accessType path]
     handleInputs inputs =
@@ -276,15 +281,15 @@ handleJobMsg _tidStr conn job (Protocol.Msg isDelayed func) =
       where
         allInputs = inputs ++ map inputOfOutputPair outputPairs
 
-wrapHandler :: RunningJob -> Socket -> IsDelayed -> IO () -> IO ()
-wrapHandler job conn isDelayed handler =
+wrapHandler :: RunningJob -> Socket -> IsDelayed -> Word32 -> IO () -> IO ()
+wrapHandler job conn isDelayed counter handler =
   forwardExceptions $ do
     handler
     -- Intentionally avoid sendGo if jobFSAccessHandler failed. It
     -- means we disallow the effect.
     case isDelayed of
-      Delayed -> sendGo conn
-      NotDelayed -> return ()
+      Delayed -> sendGo counter conn
+      NotDelayed -> sendGo counter conn
   where
     forwardExceptions =
       handleSync $ \e@E.SomeException {} ->
@@ -307,7 +312,7 @@ handleJobConnection tidStr conn job _need = do
   connFinishedMVar <- newEmptyMVar
   (`finally` putMVar connFinishedMVar ()) $
     withRegistered (jobActiveConnections job) connId (tid, readMVar connFinishedMVar) $ do
-      sendGo conn
+      sendGo 0 conn
       recvLoop_ (handleJobMsg tidStr conn job <=< Protocol.parseMsg) conn
 
 mkEnvVars :: FSHook -> FilePath -> JobId -> Process.Env

@@ -7,6 +7,7 @@ module Lib.Sock
 
 import Prelude.Compat hiding (FilePath)
 
+import Control.Monad (when)
 import Data.Monoid
 import Data.Word (Word32)
 import Lib.Binary (decode)
@@ -36,7 +37,7 @@ recvFrame sock = do
     else Just <$> recvAll sock (fromIntegral (decode frameSizeStr :: Word32))
 
 {-# INLINE recvLoop_ #-}
-recvLoop_ :: (BS.ByteString -> IO ()) -> Socket -> IO ()
+recvLoop_ :: (BS.ByteString -> IO Bool) -> Socket -> IO ()
 recvLoop_ f sock = go
   where
     go = do
@@ -44,8 +45,8 @@ recvLoop_ f sock = go
       case mFrame of
         Nothing -> return ()
         Just frame -> do
-          f frame
-          go
+          continue <- f frame
+          when continue go
 
 withUnixStreamListener :: FilePath -> (Socket -> IO a) -> IO a
 withUnixStreamListener path body =

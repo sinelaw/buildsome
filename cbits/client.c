@@ -7,6 +7,7 @@
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define PROTOCOL_HELLO "PROTOCOL10: HELLO, I AM: "
 
@@ -14,7 +15,9 @@ static __thread struct {
     pid_t pid;                  /* TODO: Document that this identifies fork()ed threads */
     int connection_fd;
     enum need need;
-} thread_state = {-1, -1, -1};
+    uint32_t msg_counter;
+    bool awaiting_go;
+} thread_state = {-1, -1, -1, 0, false};
 
 static int gettid(void)
 {
@@ -55,23 +58,17 @@ static int connect_master(const char *need_str)
     strcpy(addr.sun_path, env_sockaddr);
 
     int connect_rc = connect(fd, (struct sockaddr*) &addr, sizeof addr);
-    if(0 != connect_rc) {
-        close(fd);
-        return -1;
-    }
+    ASSERT(0 == connect_rc);
 
     char hello[strlen(PROTOCOL_HELLO) + strlen(env_job_id) + 24]; /* TODO: Avoid magic constant */
     hello[sizeof hello-1] = 0;
 
     int len = snprintf(hello, sizeof hello-1, PROTOCOL_HELLO "%d:%d:%s:%s", getpid(), gettid(),
                        env_job_id, need_str);
-    if(!send_size(fd, len)) return false;
+    ASSERT(send_size(fd, len));
 
     bool hello_success = send_all(fd, hello, len);
-    if(!hello_success) {
-        close(fd);
-        return -1;
-    }
+    ASSERT(hello_success);
 
     return fd;
 }
@@ -85,6 +82,8 @@ int client_make_connection(enum need need)
         thread_state.connection_fd = fd;
         thread_state.pid = pid;
         thread_state.need = need;
+        thread_state.awaiting_go = true;
+        thread_state.msg_counter = 0;
         if(!await_go()) return -1;
     }
     ASSERT(thread_state.need == need);
@@ -102,21 +101,50 @@ static int assert_connection(void)
     return thread_state.connection_fd;
 }
 
+static void recv_n(void *buf, uint32_t n)
+{
+    uint32_t left = n;
+    while (left > 0) {
+        ssize_t rc = recv(assert_connection(), buf, left, 0);
+        if ((rc == -1) && (errno == EINTR)) continue;
+        ASSERT(rc >= 0);
+        left -= (uint32_t)rc;
+    }
+}
+
+static bool await_go_internal(void)
+{
+    ASSERT(thread_state.awaiting_go);
+    {
+        char buf[2];
+        recv_n(PS(buf));
+        ASSERT(0 == memcmp("GO", PS(buf)));
+    }
+    {
+        uint32_t recv_counter;
+        recv_n(PS(recv_counter));
+        ASSERT(recv_counter == thread_state.msg_counter);
+    }
+    thread_state.awaiting_go = false;
+    return true;
+}
+
 bool await_go(void)
 {
-    char buf[2];
-    ssize_t rc = recv(assert_connection(), PS(buf), 0);
-    return 2 == rc && !memcmp("GO", PS(buf));
+    return await_go_internal();
 }
 
 bool client__send_hooked(bool is_delayed, const char *buf, size_t size)
 {
+    ASSERT(!thread_state.awaiting_go);
     int fd = connection();
     ASSERT(0 <= fd);
 
-    ASSERT(send_size(fd, sizeof(is_delayed)+size));
+    thread_state.msg_counter++;
+    ASSERT(send_size(fd, sizeof(is_delayed)+sizeof(thread_state.msg_counter)+size));
     ASSERT(send_all(fd, PS(is_delayed)));
+    ASSERT(send_all(fd, PS(thread_state.msg_counter)));
     ASSERT(send_all(fd, buf, size));
-
+    thread_state.awaiting_go = true;
     return true;
 }
