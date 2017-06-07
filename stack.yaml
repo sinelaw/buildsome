@@ -7,5 +7,5 @@ extra-deps:
 - leveldb-haskell-0.6.3
 - https://github.com/da-x/happy/archive/65c2494c77bd1bb321c1eb29b5117a975b1723a0.zip
 - pretty-hex-1.0
-resolver: lts-6.35
+resolver: lts-8.17
 rebuild-ghc-options: true
