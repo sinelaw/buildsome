@@ -72,6 +72,8 @@ import           Lib.SyncMap (SyncMap)
 import qualified Lib.SyncMap as SyncMap
 import           Lib.TimeIt (timeIt)
 import qualified Lib.Timeout as Timeout
+import           Lib.SharedMemory (SharedMemory)
+import qualified Lib.SharedMemory as SharedMemory
 import           System.Exit (ExitCode(..))
 import qualified System.IO as IO
 import qualified System.Posix.ByteString as Posix
@@ -92,6 +94,7 @@ data Buildsome = Buildsome
   , bsRootPath :: FilePath
   , bsBuildMaps :: BuildMaps
     -- dynamic:
+  , bsSharedMemory :: SharedMemory
   , bsDb :: Db
   , bsFsHook :: FSHook
   , bsSlaveByTargetRep :: SyncMap TargetRep (Parallelism.Entity, Slave Stats)
@@ -917,15 +920,22 @@ runCmd bte@BuildTargetEnv{..} entity target = do
   inputs <- readIORef inputsRef
   outputs <- readIORef outputsRef
   builtTargets <- readIORef builtTargetsRef
-  return RunCmdResults
-    { rcrStdOutputs = stdOutputs
-    , rcrSelfTime = realToFrac time
-    , rcrInputs =
+
+  let rcrInputs =
       -- This is because we don't serialize input/output access
       -- (especially when undelayed!) to the same file. So we don't
       -- really have a correct input stat/desc here for such inputs. However, outputs should always considered as mode-only inputs.
-      inputs `M.difference` outputs
-    , rcrOutputs = outputs
+        inputs `M.difference` outputs
+  let rcrOutputs = outputs
+  let shmem = bsSharedMemory bteBuildsome
+  let inputSet = M.keysSet rcrInputs
+  forM_ inputSet $ SharedMemory.sharedMemoryAddFile shmem
+
+  return RunCmdResults
+    { rcrStdOutputs = stdOutputs
+    , rcrSelfTime = realToFrac time
+    , rcrInputs = rcrInputs
+    , rcrOutputs = rcrOutputs
     , rcrBuiltTargets = builtTargets
     }
   where
@@ -1187,7 +1197,8 @@ with ::
   Printer -> Db -> FilePath -> Makefile -> Opt -> (Buildsome -> IO a) -> IO a
 with printer db makefilePath makefile opt@Opt{..} body = do
   ldPreloadPath <- FSHook.getLdPreloadPath optFsOverrideLdPreloadPath
-  FSHook.with printer ldPreloadPath $ \fsHook -> do
+  sharedMemory <- SharedMemory.newSharedMemory
+  FSHook.with sharedMemory printer ldPreloadPath $ \fsHook -> do
     slaveMapByTargetRep <- SyncMap.new
     -- Many, many slaves are invoked, but only up to optParallelism
     -- external processes are invoked in parallel. The Parallelism lib
@@ -1218,6 +1229,7 @@ with printer db makefilePath makefile opt@Opt{..} body = do
         , bsRootPath = rootPath
         , bsBuildMaps = buildMaps
         , bsDb = db
+        , bsSharedMemory = sharedMemory
         , bsFsHook = fsHook
         , bsSlaveByTargetRep = slaveMapByTargetRep
         , bsFreshPrinterIds = freshPrinterIds
