@@ -105,10 +105,13 @@ static void send_connection_await(const char *buf, size_t size, bool is_delayed)
 
 #define CREATION_FLAGS (O_CREAT | O_EXCL)
 
+static const char *get_self_exe(void) ATTR_WARN_UNUSED_RESULT;
+
 #define PATH_COPY(needs_await, dest, src)                               \
     do {                                                                \
         char temp_path[MAX_PATH];                                       \
         struct writer temp_writer = { temp_path, sizeof temp_path };    \
+        const char *proc_exe = get_self_exe();                          \
         if(src[0] != '/') {                                             \
             writer_append_data(&temp_writer, process_state.cwd,         \
                                process_state.cwd_length);               \
@@ -116,10 +119,11 @@ static void send_connection_await(const char *buf, size_t size, bool is_delayed)
         writer_append_str(&temp_writer, src);                           \
         struct writer dest_writer = { PS(dest) };                       \
         canonize_abs_path(&dest_writer, temp_path);                     \
-        bool in_root = try_chop_common_root(                            \
+        const bool is_self_exe = 0 == strcmp(dest_writer.buf, proc_exe); \
+        const bool in_root = try_chop_common_root(                      \
             process_state.root_filter_length,                           \
             process_state.root_filter, dest);                           \
-        needs_await = needs_await || in_root;                           \
+        needs_await = !is_self_exe && (needs_await || in_root);         \
     } while(0)
 
 #define IN_PATH_COPY(needs_await, dest, src)    \
@@ -246,6 +250,20 @@ DEFINE_WRAPPER(ssize_t, readlink, (const char *path, char *buf, size_t bufsiz))
     DEFINE_MSG(msg, readlink);
     IN_PATH_COPY(needs_await, msg.args.path, path);
     return AWAIT_CALL_REAL(needs_await, msg, readlink, path, buf, bufsiz);
+}
+
+static const char *get_self_exe(void)
+{
+    static char proc_exe[MAX_PATH + 1];
+    static bool proc_exe_read = false;
+    if (proc_exe_read) return proc_exe;
+    const ssize_t readlink_res = SILENT_CALL_REAL(readlink, "/proc/self/exe", proc_exe, sizeof(proc_exe));
+    if ((readlink_res < 0) || (readlink_res > MAX_PATH)) {
+        TRACE_ERROR("Failed to read /proc/self/exe!");
+        ASSERT(0);
+    }
+    proc_exe_read = true;
+    return proc_exe;
 }
 
 static bool dereference_dir(int dirfd, char *buf, size_t buf_len) ATTR_WARN_UNUSED_RESULT;
