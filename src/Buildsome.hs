@@ -690,6 +690,28 @@ panic render msg = do
 fst3 :: (a, b, c) -> a
 fst3 (x, _, _) = x
 
+isDeeplyUpToDate :: BuildTargetEnv -> TargetDesc -> IO Bool
+isDeeplyUpToDate bte@BuildTargetEnv{..} targetDesc = do
+  mExecutionLog <- readIRef $ Db.executionLog (tdTarget targetDesc) $ bsDb bteBuildsome
+  case mExecutionLog of
+    Nothing -> return False
+    Just executionLog -> do
+        verified <- runEitherT $ executionLogVerifyFilesState bte targetDesc executionLog
+        case verified of
+            Left{} -> return False
+            Right{} -> all id <$> mapM (isInputDeeplyUpToDate bte) (M.keys $ Db.elInputsDescs executionLog)
+
+isInputDeeplyUpToDate :: BuildTargetEnv -> FilePath -> IO Bool
+isInputDeeplyUpToDate bte@BuildTargetEnv{..} path
+  | FilePath.isAbsolute path =
+    -- Only project-relative paths may have output rules:
+    return False
+  | not bteExplicitlyDemanded && isPhony bteBuildsome path = return False
+  | otherwise =
+  case BuildMaps.find (bsBuildMaps bteBuildsome) path of
+  Nothing -> return False
+  Just (targetKind, targetDesc) -> isDeeplyUpToDate bte targetDesc
+
 -- Find existing slave for target, or spawn a new one
 getSlaveForTarget :: BuildTargetEnv -> TargetDesc -> IO (Parallelism.Entity, Slave Stats)
 getSlaveForTarget bte@BuildTargetEnv{..} TargetDesc{..}
