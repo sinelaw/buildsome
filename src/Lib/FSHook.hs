@@ -193,7 +193,7 @@ with printer ldPreloadPath body = do
           AsyncContext.spawn ctx $
             -- Job connection may fail when the process is killed
             -- during a send-message, which may cause a protocol error
-            printRethrowExceptions "Job connection failed: " $
+            printRethrowExceptions ("Job connection failed (pid=" <> (show pid) <> "): ") $
             serve printer fsHook conn
             `finally` Sock.close conn
       body fsHook
