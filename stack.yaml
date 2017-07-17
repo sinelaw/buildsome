@@ -5,4 +5,4 @@ packages:
 - '.'
 extra-deps: []
 rebuild-ghc-options: true
-resolver: lts-6.7
+resolver: lts-8.1

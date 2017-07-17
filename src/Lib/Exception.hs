@@ -13,11 +13,7 @@ module Lib.Exception
   ) where
 
 import qualified Control.Exception as E
-#if MIN_VERSION_base(4,7,0)
 import           Control.Exception (SomeAsyncException)
-#else
-import           Data.Typeable
-#endif
 import           Data.Maybe        (isJust)
 import qualified System.IO         as IO
 
@@ -74,18 +70,6 @@ bracketOnError before after = E.bracketOnError before (E.uninterruptibleMask_ . 
 -- The following was copied from asynchronous-exceptions, as that package has been deprecated (and
 -- requires base < 4.8)
 ---------------------------------------------------------------------------
-
-#if !MIN_VERSION_base(4,7,0)
--- | Exception class for asynchronous exceptions
-data SomeAsyncException
-  = forall e . E.Exception e => SomeAsyncException e
-  deriving Typeable
-
-instance E.Exception SomeAsyncException
-
-instance Show SomeAsyncException where
-  showsPrec p (SomeAsyncException e) = showsPrec p e
-#endif
 
 isAsynchronous :: E.SomeException -> Bool
 isAsynchronous e =
