@@ -8,6 +8,7 @@ import           Buildsome.BuildMaps (TargetRep)
 import qualified Buildsome.BuildMaps as BuildMaps
 import           Buildsome.Stats (Stats)
 import qualified Buildsome.Stats as Stats
+import           Control.Monad (filterM)
 import           Control.Monad.Trans.Class (MonadTrans(..))
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS8
@@ -114,7 +115,7 @@ onOneTarget' phoniesSet cwd stats target targetStats targetRep =
         lift
         $ concatMap makefileTargetPaths <$> mapM makefileTarget
         (filter hasStats $ Stats.tsDirectDeps targetStats)
-    (_, inputPaths) <- lift $ suffixDirs inputs
+    inputPaths <- lift $ filterM (\x -> not <$> isDir x) inputs
     let
       (phonies, nonPhonies) = partition (`Set.member` phoniesSet) $ makefileTargetPaths tgt
       targetDecl =
