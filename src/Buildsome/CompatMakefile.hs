@@ -39,12 +39,16 @@ data MakefileTarget = MakefileTarget
   , isDirectory :: Bool
   }
 
+suffixDirs paths = do
+  (targetOutputDirs, targetOutputFiles) <- partitionA isDir paths
+  return (targetOutputDirs, map (</> ".dir") targetOutputDirs ++ targetOutputFiles)
+
 makefileTarget :: Target -> IO MakefileTarget
 makefileTarget target = do
   repIsDir <- isDir repPath
-  (targetOutputDirs, targetOutputFiles) <- partitionA isDir (targetOutputs target)
+  (targetOutputDirs, targetPaths) <- suffixDirs (targetOutputs target)
   return MakefileTarget
-    { makefileTargetPaths = map (</> ".dir") targetOutputDirs ++ targetOutputFiles
+    { makefileTargetPaths = targetPaths
     , makefileTargetDirs = targetOutputDirs
     , isDirectory = repIsDir
     }
@@ -110,11 +114,12 @@ onOneTarget' phoniesSet cwd stats target targetStats targetRep =
         lift
         $ concatMap makefileTargetPaths <$> mapM makefileTarget
         (filter hasStats $ Stats.tsDirectDeps targetStats)
+    (_, inputPaths) <- lift $ suffixDirs inputs
     let
       (phonies, nonPhonies) = partition (`Set.member` phoniesSet) $ makefileTargetPaths tgt
       targetDecl =
         [ "T := " <> BS8.unwords (makefileTargetPaths tgt)
-        , "D := " <> BS8.unwords (sortNub $ directDepsPaths <> inputs)
+        , "D := " <> BS8.unwords (sortNub $ directDepsPaths <> inputPaths)
         , "$(T): $(D)"
         ]
       myLines = concat
