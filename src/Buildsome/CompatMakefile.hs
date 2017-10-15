@@ -99,19 +99,14 @@ onOneTarget' phoniesSet cwd stats target targetStats targetRep =
         fromMaybe
         (error "compat makefile requested without tsExistingInputs being calculated?!")
         (Stats.tsExistingInputs targetStats)
-      directDeps = Stats.tsDirectDeps targetStats
       depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
     depsLines <- depBuildCommands
     tgt <- lift $ makefileTarget target
-    directDepsPaths <-
-        lift
-        $ concatMap makefileTargetPaths <$> mapM makefileTarget
-        (Stats.tsDirectDeps targetStats)
     let
       (phonies, nonPhonies) = partition (`Set.member` phoniesSet) $ makefileTargetPaths tgt
       targetDecl =
         [ "T := " <> BS8.unwords (makefileTargetPaths tgt)
-        , "D := " <> BS8.unwords (sortNub $ directDepsPaths <> inputs)
+        , "D := " <> BS8.unwords (sortNub inputs)
         , "$(T): $(D)"
         ]
       myLines = concat
