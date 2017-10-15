@@ -99,6 +99,7 @@ onOneTarget' phoniesSet cwd stats target targetStats targetRep =
         fromMaybe
         (error "compat makefile requested without tsExistingInputs being calculated?!")
         (Stats.tsExistingInputs targetStats)
+      directDeps = Stats.tsDirectDeps targetStats
       depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
     depsLines <- depBuildCommands
     tgt <- lift $ makefileTarget target
