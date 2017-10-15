@@ -101,13 +101,20 @@ onOneTarget' phoniesSet cwd stats target targetStats targetRep =
         (Stats.tsExistingInputs targetStats)
       directDeps = Stats.tsDirectDeps targetStats
       depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
+      hasStats dep = case Map.lookup (BuildMaps.computeTargetRep dep) (Stats.ofTarget stats) of
+        Nothing -> False
+        Just _ -> True
     depsLines <- depBuildCommands
     tgt <- lift $ makefileTarget target
+    directDepsPaths <-
+        lift
+        $ concatMap makefileTargetPaths <$> mapM makefileTarget
+        (filter hasStats $ Stats.tsDirectDeps targetStats)
     let
       (phonies, nonPhonies) = partition (`Set.member` phoniesSet) $ makefileTargetPaths tgt
       targetDecl =
         [ "T := " <> BS8.unwords (makefileTargetPaths tgt)
-        , "D := " <> BS8.unwords (sortNub inputs)
+        , "D := " <> BS8.unwords (sortNub $ directDepsPaths <> inputs)
         , "$(T): $(D)"
         ]
       myLines = concat
