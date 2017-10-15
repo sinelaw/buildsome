@@ -83,8 +83,24 @@ sortNub = Set.toList . Set.fromList
 
 onOneTarget :: Phonies -> FilePath -> Stats -> Target -> M [ByteString]
 onOneTarget phoniesSet cwd stats target =
+  case mTargetStats of
+    Nothing -> return ["# No stats for: " <> (BS8.pack . showPos . targetPos) target]
+    Just targetStats -> onOneTarget' phoniesSet cwd stats target targetStats targetRep
+  where
+    targetRep = BuildMaps.computeTargetRep target
+    mTargetStats = Map.lookup targetRep (Stats.ofTarget stats)
+
+onOneTarget' :: Phonies -> FilePath -> Stats -> Target -> Stats.TargetStats -> TargetRep -> M [ByteString]
+onOneTarget' phoniesSet cwd stats target targetStats targetRep =
   fmap (fromMaybe []) $
   Revisit.avoid targetRep $ do
+    let
+      inputs =
+        fromMaybe
+        (error "compat makefile requested without tsExistingInputs being calculated?!")
+        (Stats.tsExistingInputs targetStats)
+      directDeps = Stats.tsDirectDeps targetStats
+      depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
     depsLines <- depBuildCommands
     tgt <- lift $ makefileTarget target
     directDepsPaths <-
@@ -107,20 +123,6 @@ onOneTarget phoniesSet cwd stats target =
         , [ "" ]
         ]
     return $ myLines ++ depsLines
-  where
-    inputs =
-      fromMaybe
-      (error "compat makefile requested without tsExistingInputs being calculated?!")
-      (Stats.tsExistingInputs targetStats)
-    targetRep = BuildMaps.computeTargetRep target
-    directDeps = Stats.tsDirectDeps targetStats
-    targetStats =
-      fromMaybe
-      (error $ mconcat
-       [ "BUG: Stats does not contain targets that appear as root/dependencies: "
-       , show $ BuildMaps.targetRepPath targetRep ])
-      $ Map.lookup targetRep (Stats.ofTarget stats)
-    depBuildCommands = onMultipleTargets phoniesSet cwd stats directDeps
 
 onMultipleTargets :: Phonies -> FilePath -> Stats -> [Target] -> M [ByteString]
 onMultipleTargets phoniesSet cwd stats = fmap concat . mapM (onOneTarget phoniesSet cwd stats)
@@ -136,4 +138,3 @@ make phoniesSet cwd stats rootTargets filePath = do
     , "# ON THE FILE SYSTEM (even outside your project). USE CAREFULLY."
     , "# make -f compat-makefile"
     ] ++ makefileLines
-
