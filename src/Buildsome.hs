@@ -1172,6 +1172,8 @@ makeExecutionLog buildsome target inputs outputs stdOutputs selfTime = {-# SCC "
 
     canonicalizePath = FilePath.canonicalizePathAsRelativeCwd (bsRootPath buildsome)
     getExternalSubdirFor path a@_ | "/usr/bin" `BS8.isPrefixOf` path = Left (path, a)
+    getExternalSubdirFor path a@_ | "/usr/lib" `BS8.isPrefixOf` path = Left (path, a)
+    getExternalSubdirFor path a@_ | "/usr/local/google" `BS8.isPrefixOf` path = Left (path, a)
     getExternalSubdirFor path a =
           case FilePath.splitPath path of
               ("/":xs@(top:_)) | length xs > 2 && top == "usr" -> Right $ foldl' (</>) "/" $ init xs
