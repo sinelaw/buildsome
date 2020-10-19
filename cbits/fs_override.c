@@ -17,8 +17,10 @@
 
 static void vtrace(enum severity, const char *fmt, va_list);
 static void trace(enum severity, const char *fmt, ...);
+static FILE *log_file(void);
 
-#define TRACE_DEBUG(...)   // TRACE(severity_debug, __VA_ARGS__)
+#define TRACE_DEBUG(msg, ...)                                           \
+  fprintf(log_file(), "%s(%d): " msg "\n", __FILE__, __LINE__, ##__VA_ARGS__)
 #define TRACE_WARNING(...) trace(severity_warning, __VA_ARGS__)
 #define TRACE_ERROR(...)   trace(severity_error, __VA_ARGS__)
 
@@ -87,6 +89,7 @@ static void send_connection_await(const char *buf, size_t size, bool is_delayed)
 
 #define SEND_MSG_AWAIT(_is_delayed, msg)                \
     ({                                                  \
+        TRACE_DEBUG("sending: .func = %d", msg.func);   \
         send_connection_await(PS(msg), _is_delayed);    \
     })
 
@@ -97,6 +100,7 @@ static void send_connection_await(const char *buf, size_t size, bool is_delayed)
     })
 
 #define DEFINE_MSG(msg, name)                   \
+    TRACE_DEBUG(".func = func_ "#name " = %d", func_##name); \
     struct {                                    \
         enum func func;                         \
         struct func_##name args;                \
@@ -150,7 +154,9 @@ static bool try_chop_common_root(unsigned prefix_length, char *prefix, char *can
 
 #define CALL_WITH_OUTPUTS(msg, _is_delayed, ret_type, args, out_report_code) \
     ({                                                                  \
+        TRACE_DEBUG(".func = %d", msg.func);                            \
         if(_is_delayed) {                                               \
+            TRACE_DEBUG("sending: .func = %d", msg.func);               \
             send_connection_await(PS(msg), true);                       \
         }                                                               \
         ret_type result = SILENT_CALL_REAL args;                        \

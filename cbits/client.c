@@ -115,6 +115,9 @@ bool await_go(void)
         ssize_t rc = recv(assert_connection(), &buf[got], sizeof(buf) - got, 0);
         if (rc == 0) break;
         if (rc == -1 && errno == EINTR) continue;
+        if (rc <= 0) {
+          LOG(error, "rc: %ld, errno: %d", rc, errno);
+        }
         ASSERT(rc > 0);
         got += (uint32_t)rc;
     }
