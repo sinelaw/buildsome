@@ -190,6 +190,7 @@ DEFINE_WRAPPER(int, name, (int vers, const char *path, struct stat_struct *buf))
 {                                                                       \
     initialize_process_state();                                         \
     bool needs_await = false;                                           \
+    printf("stat: %s\n", path);\
     DEFINE_MSG(msg, msg_type);                                          \
     IN_PATH_COPY(needs_await, msg.args.path, path);                     \
     return AWAIT_CALL_REAL(needs_await, msg, name, vers, path, buf);    \
@@ -201,13 +202,36 @@ DEFINE_STAT_WRAPPER( __xstat64,  stat, stat64)
 DEFINE_STAT_WRAPPER(__lxstat64, lstat, stat64)
 
 /* Depends on the full path */
-DEFINE_WRAPPER(int, fstatat, (int dirfd, const char *pathname, struct stat *statbuf, int flags))
+DEFINE_WRAPPER(int, __xfstatat, (int fd_of_dir, const char *pathname, struct stat *statbuf, int flags))
 {
     initialize_process_state();
     bool needs_await = false;
-    DEFINE_MSG(msg, stat);
-    IN_PATH_COPY(needs_await, msg.args.path, pathname);
-    return AWAIT_CALL_REAL(needs_await, msg, fstatat, dirfd, pathname, statbuf, flags);
+
+    char buf[PATH_MAX*2];
+    printf("fstatat: %d, %s\n", fd_of_dir, pathname);
+    const char *fullpath;
+    if ((fd_of_dir != AT_FDCWD) && (pathname[0] != '/')) {
+      DIR* save = opendir(".");
+      char dirpath[PATH_MAX];
+      fchdir(fd_of_dir);
+      getcwd(dirpath, PATH_MAX);
+      fchdir(dirfd(save));
+      closedir(save);
+      snprintf(buf, PATH_MAX*2, "%s/%s", dirpath, pathname);
+      fullpath = buf;
+      printf("fstatat: %s\n", fullpath);
+    } else {
+      fullpath = pathname;
+    }
+    if (flags | AT_SYMLINK_NOFOLLOW) {
+        DEFINE_MSG(msg, lstat);
+        IN_PATH_COPY(needs_await, msg.args.path, fullpath);
+        return AWAIT_CALL_REAL(needs_await, msg, __xfstatat, fd_of_dir, pathname, statbuf, flags);
+    } else {
+        DEFINE_MSG(msg, stat);
+        IN_PATH_COPY(needs_await, msg.args.path, fullpath);
+        return AWAIT_CALL_REAL(needs_await, msg, __xfstatat, fd_of_dir, pathname, statbuf, flags);
+    }
 }
 
 /* Depends on the full path */
